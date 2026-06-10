@@ -1504,6 +1504,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerToggleSprintEvent;
+import org.bukkit.potion.PotionEffectType;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -1512,116 +1513,248 @@ import java.util.UUID;
 public class PlayerListener implements Listener {
 
     /** Zones interactives détectées par déplacement. */
+
     private enum Zone { GARAGE, VENDING_MACHINE, DRONE_SHOP, SELL_ZONE }
 
     private final CleanTheBackyard plugin;
+
     /** Zone actuellement occupée par chaque joueur (anti-spam à l'entrée). */
+
     private final Map<UUID, Zone> currentZone = new HashMap<>();
 
     public PlayerListener(CleanTheBackyard plugin) {
+
         this.plugin = plugin;
+
     }
 
     @EventHandler
+
     public void onJoin(PlayerJoinEvent event) {
+
         var player = event.getPlayer();
+
         plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () ->
+
                 plugin.getServer().getScheduler().runTask(plugin, () -> {
+
                     PlayerData data = plugin.getPlayerDataManager().loadPlayer(player);
+
                     int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel());
+
                     if (data.getCurrentEnergy() > maxEnergy) data.setCurrentEnergy(maxEnergy);
 
                     player.sendMessage(ChatUtil.colored(
+
                             "&a&lClean The Backyard &8| &fBienvenue " + player.getName() + " !"
+
                                     + "\n&7Solde : &f$" + String.format("%.0f", data.getBalance())
+
                                     + " &7| Sac : &f" + data.getCurrentBoxes() + "/" +
+
                                     plugin.getBoxManager().getBagCapacity(data.getBagLevel())
+
                     ));
+
                 })
+
         );
+
     }
 
     @EventHandler
+
     public void onQuit(PlayerQuitEvent event) {
+
         plugin.getPlayerDataManager().unloadPlayer(event.getPlayer().getUniqueId());
+
         currentZone.remove(event.getPlayer().getUniqueId());
+
     }
 
     @EventHandler
+
     public void onSprint(PlayerToggleSprintEvent event) {
+
         if (!event.isSprinting()) return;
 
         var player = event.getPlayer();
+
         PlayerData data = plugin.getPlayerDataManager().get(player);
+
         if (data == null) return;
 
         if (data.getCurrentEnergy() < 10) {
+
             player.sendActionBar(Component.text(
+
                     ChatUtil.color("&cEnergie faible ! (" + String.format("%.0f", data.getCurrentEnergy()) + ")")
+
             ));
+
         }
+
     }
 
     @EventHandler
+
     public void onMove(PlayerMoveEvent event) {
+
         var player = event.getPlayer();
+
         PlayerData data = plugin.getPlayerDataManager().get(player);
+
         if (data == null) return;
 
+        // Gestion des effets de fatigue selon l'énergie
+        updateEnergyEffects(player, data);
+
         // Fatigue en sprint si énergie = 0
+
         if (player.isSprinting() && data.getCurrentEnergy() <= 0) {
+
             plugin.getBoxManager().applyFatigue(player, data);
+
         }
 
         // Détection uniquement quand on change de bloc (perf)
+
         if (event.getTo() == null) return;
+
         if (event.getFrom().getBlockX() == event.getTo().getBlockX()
+
                 && event.getFrom().getBlockY() == event.getTo().getBlockY()
+
                 && event.getFrom().getBlockZ() == event.getTo().getBlockZ()) return;
 
         Zone newZone = detectZone(event.getTo());
+
         Zone oldZone = currentZone.get(player.getUniqueId());
 
         if (newZone == oldZone) return;
 
         if (newZone == null) {
+
             currentZone.remove(player.getUniqueId());
+
             return;
+
         }
 
         // La zone de vente n'ouvre pas de GUI, donc elle ignore hasOpenGui.
+
         if (newZone != Zone.SELL_ZONE && plugin.getGuiManager().hasOpenGui(player)) return;
 
         currentZone.put(player.getUniqueId(), newZone);
+
         switch (newZone) {
+
             case GARAGE          -> plugin.getGuiManager().openUpgradeGui(player);
+
             case VENDING_MACHINE -> plugin.getGuiManager().openVendingMachine(player);
+
             case DRONE_SHOP      -> plugin.getGuiManager().openDroneShop(player);
+
             case SELL_ZONE       -> plugin.getEconomyManager().sellBag(player);
+
         }
+
+    }
+
+    /**
+
+     * Gère les effets de potion selon le niveau d'énergie.
+
+     * - En dessous de 5 : Slowness + Blindness
+
+     * - Au-dessus de 25 : Retire tous les effets négatifs
+
+     */
+
+    private void updateEnergyEffects(Player player, PlayerData data) {
+
+        double currentEnergy = data.getCurrentEnergy();
+
+        if (currentEnergy < 5) {
+
+            // Applique slowness et blindness
+
+            if (!player.hasPotionEffect(PotionEffectType.SLOWNESS)) {
+
+                player.addPotionEffect(new org.bukkit.potion.PotionEffect(
+
+                        PotionEffectType.SLOWNESS, Integer.MAX_VALUE, 2, false, false, false
+
+                ));
+
+            }
+
+            if (!player.hasPotionEffect(PotionEffectType.BLINDNESS)) {
+
+                player.addPotionEffect(new org.bukkit.potion.PotionEffect(
+
+                        PotionEffectType.BLINDNESS, Integer.MAX_VALUE, 0, false, false, false
+
+                ));
+
+            }
+
+        } else if (currentEnergy > 25) {
+
+            // Retire slowness et blindness
+
+            if (player.hasPotionEffect(PotionEffectType.SLOWNESS)) {
+
+                player.removePotionEffect(PotionEffectType.SLOWNESS);
+
+            }
+
+            if (player.hasPotionEffect(PotionEffectType.BLINDNESS)) {
+
+                player.removePotionEffect(PotionEffectType.BLINDNESS);
+
+            }
+
+        }
+
     }
 
     /** Renvoie la zone d'interaction dans laquelle se trouve la position, ou null. */
+
     private Zone detectZone(Location loc) {
+
         PluginConfig cfg = plugin.getPluginConfig();
+
         World world = loc.getWorld();
+
         if (world == null || !world.getName().equals(cfg.getGameWorldName())) return null;
 
         if (inRadius(loc, cfg.getGarageLocation(), cfg.getGarageRadius()))
+
             return Zone.GARAGE;
+
         if (inRadius(loc, cfg.getVendingMachineLocation(), cfg.getVendingMachineRadius()))
+
             return Zone.VENDING_MACHINE;
+
         if (inRadius(loc, cfg.getDroneShopLocation(), cfg.getDroneShopRadius()))
+
             return Zone.DRONE_SHOP;
+
         if (inRadius(loc, cfg.getSellZoneCenter(), cfg.getSellZoneRadius()))
+
             return Zone.SELL_ZONE;
 
         return null;
+
     }
 
     private boolean inRadius(Location player, Location target, double radius) {
+
         if (target.getWorld() == null || !target.getWorld().equals(player.getWorld())) return false;
+
         return player.distanceSquared(target) <= radius * radius;
+
     }
 
 }
@@ -2068,7 +2201,6 @@ import org.bukkit.entity.*;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
-
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -2076,360 +2208,726 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class EventManager {
 
     private final CleanTheBackyard plugin;
+
     private final Random random = new Random();
 
     // ── OVNI ──────────────────────────────────────────────────────────
+
     private boolean ufoEventActive      = false;
+
     private boolean ufoMultiplierActive = false;
+
     private final AtomicInteger ufoBoxCount = new AtomicInteger(0);
+
     private int ufoQuota = 0;
 
     // Boites spéciales OVNI : location -> type de récompense
+
     public enum UfoBoxReward { BONUS_MONEY, DOUBLE_SELL, UNLIMITED_ENERGY }
+
     private final Map<String, UfoBoxReward> ufoBoxes = new HashMap<>();
+
     private final List<Location> ufoBoxLocations = new ArrayList<>();
 
+    private BukkitTask ufoTimeoutTask = null;
+
     // ── Drone Doré ────────────────────────────────────────────────────
+
     private UUID     goldenDroneEntityUUID = null;
+
     private int      goldenDroneReward     = 0;
+
     private BukkitTask goldenDroneTask     = null;
 
+    private Player   goldenDroneTarget     = null;
+
     public EventManager(CleanTheBackyard plugin) {
+
         this.plugin = plugin;
+
     }
 
     // ── PLANIFICATION ─────────────────────────────────────────────────
 
     public void scheduleNextUfoEvent() {
+
         PluginConfig cfg = plugin.getPluginConfig();
+
         int delaySeconds = cfg.getUfoMin() + random.nextInt(cfg.getUfoMax() - cfg.getUfoMin());
+
         Bukkit.getScheduler().runTaskLater(plugin, this::startUfoEvent, delaySeconds * 20L);
+
         plugin.getLogger().info("[CTB] Prochain événement OVNI dans " + delaySeconds + "s.");
+
     }
 
     public void scheduleNextGoldenDrone() {
+
         PluginConfig cfg = plugin.getPluginConfig();
+
         int delaySeconds = cfg.getGoldenDroneMin()
+
                 + random.nextInt(cfg.getGoldenDroneMax() - cfg.getGoldenDroneMin());
+
         Bukkit.getScheduler().runTaskLater(plugin, this::spawnGoldenDrone, delaySeconds * 20L);
+
         plugin.getLogger().info("[CTB] Prochain Drone Doré dans " + delaySeconds + "s.");
+
     }
 
     // ── OVNI ──────────────────────────────────────────────────────────
 
     private void startUfoEvent() {
+
         ufoEventActive = true;
+
         ufoBoxCount.set(0);
+
         ufoQuota = plugin.getPluginConfig().getUfoEventQuota();
 
         spawnUfoBoxes();
 
         String msg = ChatUtil.color("&5[ALERTE] &dUn OVNI survole le jardin ! "
+
                 + "Des &fcaisses mystérieuses &dont atterri ! "
+
                 + "Détruisez &f" + ufoQuota + " &dcartons en équipe pour activer le &fx2 &dde vente !");
 
         Title title = Title.title(
+
                 Component.text(ChatUtil.color("&5ALERTE OVNI !")),
+
                 Component.text(ChatUtil.color("&dDes caisses spéciales sont apparues !")),
+
                 Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(5), Duration.ofMillis(1000))
+
         );
 
         for (var player : Bukkit.getOnlinePlayers()) {
+
             player.sendMessage(msg);
+
             player.showTitle(title);
+
             player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.5f);
+
         }
 
-        // Fin automatique après 10 minutes
+        // Fin automatique après 10 minutes OU timeout des boites à 30s
         new BukkitRunnable() {
+
             @Override public void run() {
+
                 if (ufoEventActive) endUfoEvent(false);
+
             }
+
         }.runTaskLater(plugin, 20L * 600);
+
+        // Timeout des boites OVNI après 30 secondes
+        scheduleUfoBoxTimeout();
+
     }
 
+    private void scheduleUfoBoxTimeout() {
+        if (ufoTimeoutTask != null) ufoTimeoutTask.cancel();
+
+        ufoTimeoutTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!ufoEventActive) return;
+
+                World world = plugin.getPluginConfig().getGameWorld();
+                if (world == null) return;
+
+                // Supprime les boîtes restantes
+                List<Location> toRemove = new ArrayList<>();
+                for (Location loc : ufoBoxLocations) {
+                    if (loc.getBlock().getType() == Material.GLOWSTONE) {
+                        loc.getBlock().setType(Material.AIR, false);
+                        toRemove.add(loc);
+                    }
+                }
+
+                int removed = toRemove.size();
+
+                // Nettoie les maps AVANT endUfoEvent pour éviter un double nettoyage
+                toRemove.forEach(loc -> ufoBoxes.remove(locKey(loc)));
+                ufoBoxLocations.removeAll(toRemove);
+
+                if (removed > 0) {
+                    Bukkit.getOnlinePlayers().forEach(p ->
+                            p.sendMessage(ChatUtil.colored(
+                                    "&d[OVNI] &fLes caisses mystérieuses ont disparu... "
+                                            + removed + " n'ont pas été réclamées."
+                            ))
+                    );
+                }
+
+                // ← CORRECTION : termine proprement l'événement
+                // ufoBoxes et ufoBoxLocations sont déjà vidés, endUfoEvent ne re-supprimera rien
+                endUfoEvent(false);
+            }
+        }.runTaskLater(plugin, 20L * 30);
+    }
+
+
     private void spawnUfoBoxes() {
+
         ufoBoxes.clear();
+
         ufoBoxLocations.clear();
 
         World world = plugin.getPluginConfig().getGameWorld();
+
         if (world == null || world.getPlayers().isEmpty()) return;
 
         // Spawn 5 caisses spéciales autour de joueurs aléatoires
+
         List<Player> players = new ArrayList<>(world.getPlayers());
+
         UfoBoxReward[] rewards = UfoBoxReward.values();
 
         for (int i = 0; i < 5; i++) {
+
             Player target = players.get(random.nextInt(players.size()));
+
             Location base = target.getLocation();
 
             // Offset aléatoire dans un rayon de 8-15 blocs, même Y
+
             double angle = random.nextDouble() * Math.PI * 2;
+
             double dist  = 8 + random.nextInt(8);
+
             Location spawnLoc = base.clone().add(
+
                     Math.cos(angle) * dist,
+
                     0,
+
                     Math.sin(angle) * dist
+
             );
+
             spawnLoc.setY(spawnLoc.getWorld().getHighestBlockYAt(spawnLoc));
 
             // Évite de placer sur un bloc NOTE_BLOCK existant
+
             if (spawnLoc.getBlock().getType() != Material.AIR) {
+
                 spawnLoc.add(0, 1, 0);
+
             }
 
             UfoBoxReward reward = rewards[random.nextInt(rewards.length)];
+
             spawnLoc.getBlock().setType(Material.GLOWSTONE, false);
 
             String key = locKey(spawnLoc);
+
             ufoBoxes.put(key, reward);
+
             ufoBoxLocations.add(spawnLoc.clone());
+
         }
 
         Bukkit.getOnlinePlayers().forEach(p ->
+
                 p.sendMessage(ChatUtil.colored("&d[OVNI] &fDes caisses &6mystérieuses &fbrillantes ont atterri dans le jardin !"))
+
         );
+
     }
 
     /**
+
      * Appelé quand un joueur collecte une caisse OVNI spéciale.
+
      * @return true si c'était bien une caisse OVNI
+
      */
+
     public boolean tryClaimUfoBox(Player player, Location loc) {
+
         String key = locKey(loc);
+
         UfoBoxReward reward = ufoBoxes.remove(key);
+
         if (reward == null) return false;
 
         ufoBoxLocations.removeIf(l -> locKey(l).equals(key));
+
         loc.getBlock().setType(Material.AIR, false);
 
         PlayerData data = plugin.getPlayerDataManager().get(player);
+
         if (data == null) return true;
 
         switch (reward) {
+
             case BONUS_MONEY -> {
+
                 int bonus = 500 + random.nextInt(1500); // 500-2000$
+
                 plugin.getEconomyManager().credit(player, bonus);
+
                 player.sendMessage(ChatUtil.colored(
+
                         "&6[OVNI] &fCaisse mystérieuse ! Vous avez trouvé &a+$" + bonus + " &fdedans !"
+
                 ));
+
                 Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+
                         p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a trouvé de l'argent dans une caisse OVNI !"))
+
                 );
+
             }
+
             case DOUBLE_SELL -> {
+
                 data.setDoubleSell(180); // 3 minutes
+
                 player.sendMessage(ChatUtil.colored(
+
                         "&6[OVNI] &fCaisse mystérieuse ! &ex2 VENTE &fpersonnel pendant &f3 minutes &f!"
+
                 ));
+
                 Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+
                         p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a obtenu un &ex2 vente personnel &fpendant 3 min !"))
+
                 );
+
             }
+
             case UNLIMITED_ENERGY -> {
+
                 data.setUnlimitedEnergy(300); // 5 minutes
+
                 plugin.getBoxManager().removeFatigue(player, data);
+
                 player.sendMessage(ChatUtil.colored(
+
                         "&6[OVNI] &fCaisse mystérieuse ! &bÉNERGIE ILLIMITÉE &fpendant &f5 minutes &f!"
+
                 ));
+
                 Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+
                         p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a obtenu de l'&bénergie illimitée &fpendant 5 min !"))
+
                 );
+
             }
+
         }
+
         return true;
+
     }
 
     public boolean isUfoBox(Location loc) {
+
         return ufoBoxes.containsKey(locKey(loc));
+
     }
 
     public void onBoxBroken(Location loc) {
+
         if (!ufoEventActive) return;
 
         int count = ufoBoxCount.incrementAndGet();
+
         if (count % 50 == 0) {
+
             Bukkit.getOnlinePlayers().forEach(p ->
+
                     p.sendMessage(ChatUtil.colored("&d[OVNI] &f" + count + " / " + ufoQuota + " cartons détruits !"))
+
             );
+
         }
+
         if (count >= ufoQuota) endUfoEvent(true);
+
     }
 
     private void endUfoEvent(boolean success) {
+
         ufoEventActive = false;
+
+        // Annule le timeout si en cours
+        if (ufoTimeoutTask != null) {
+
+            ufoTimeoutTask.cancel();
+
+            ufoTimeoutTask = null;
+
+        }
+
         // Nettoie les boites OVNI restantes
+
         ufoBoxLocations.forEach(l -> {
+
             if (l.getBlock().getType() == Material.GLOWSTONE) l.getBlock().setType(Material.AIR, false);
+
         });
+
         ufoBoxes.clear();
+
         ufoBoxLocations.clear();
 
         if (success) {
+
             activateSellMultiplier();
+
         } else {
+
             Bukkit.getOnlinePlayers().forEach(p ->
+
                     p.sendMessage(ChatUtil.colored("&c[OVNI] Objectif non atteint ! "
+
                             + ufoBoxCount.get() + "/" + ufoQuota + " cartons."))
+
             );
+
         }
+
         scheduleNextUfoEvent();
+
     }
 
     private void activateSellMultiplier() {
+
         ufoMultiplierActive = true;
+
         plugin.getPluginConfig().setGlobalSellMultiplier(2.0);
 
         Bukkit.getOnlinePlayers().forEach(p -> {
+
             p.sendMessage(ChatUtil.colored("&6[SUCCÈS] &ex2 bonus de vente global pendant "
+
                     + plugin.getPluginConfig().getUfoMultiplierDuration() + "s !"));
+
             p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+
         });
 
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
+
             plugin.getPluginConfig().setGlobalSellMultiplier(1.0);
+
             ufoMultiplierActive = false;
+
             Bukkit.getOnlinePlayers().forEach(p ->
+
                     p.sendMessage(ChatUtil.colored("&7[Bonus] Le multiplicateur x2 global est expiré."))
+
             );
+
         }, plugin.getPluginConfig().getUfoMultiplierDuration() * 20L);
+
     }
 
     // ── DRONE DORÉ ────────────────────────────────────────────────────
 
     public void spawnGoldenDrone() {
+
         if (goldenDroneEntityUUID != null) return; // déjà actif
 
         Collection<? extends Player> online = Bukkit.getOnlinePlayers();
+
         if (online.isEmpty()) {
+
             scheduleNextGoldenDrone();
+
             return;
+
         }
 
         // Cible un joueur aléatoire
-        Player target = online.stream()
-                .skip(random.nextInt(online.size()))
-                .findFirst().orElse(null);
-        if (target == null) { scheduleNextGoldenDrone(); return; }
 
-        PluginConfig cfg = plugin.getPluginConfig();
-        goldenDroneReward = cfg.getGoldenDroneRewardMin()
-                + random.nextInt(cfg.getGoldenDroneRewardMax() - cfg.getGoldenDroneRewardMin());
+        goldenDroneTarget = online.stream()
+
+                .skip(random.nextInt(online.size()))
+
+                .findFirst().orElse(null);
+
+        if (goldenDroneTarget == null) { scheduleNextGoldenDrone(); return; }
+
+        // Calcule la récompense en fonction de la progression du joueur
+        PlayerData targetData = plugin.getPlayerDataManager().get(goldenDroneTarget);
+
+        goldenDroneReward = calculateDroneReward(targetData);
 
         // Spawn à 4-6 blocs au-dessus du joueur, légèrement décalé
-        Location spawnLoc = target.getLocation().clone().add(
+
+        Location spawnLoc = goldenDroneTarget.getLocation().clone().add(
+
                 (random.nextDouble() - 0.5) * 6,
-                4 + random.nextInt(3), // hauteur 4-6 : frappable depuis le sol
+
+                4 + random.nextDouble() * 2, // hauteur 4-6 : frappable depuis le sol
+
                 (random.nextDouble() - 0.5) * 6
+
         );
 
         Bat drone = (Bat) spawnLoc.getWorld().spawnEntity(spawnLoc, EntityType.BAT);
-        drone.setCustomName(ChatUtil.color("&6✦ Drone Doré [$" + goldenDroneReward + "] ✦"));
-        drone.setCustomNameVisible(true);
-        drone.setRemoveWhenFarAway(false);
-        drone.setAware(false); // NoAI pour contrôle manuel
 
-        // Vitesse linéaire aléatoire
-        double angle = random.nextDouble() * Math.PI * 2;
-        double speed = 0.12;
-        drone.setVelocity(new Vector(Math.cos(angle) * speed, 0, Math.sin(angle) * speed));
+        drone.setCustomName(ChatUtil.color("&6✦ Drone Doré [$" + goldenDroneReward + "] ✦"));
+
+        drone.setCustomNameVisible(true);
+
+        drone.setRemoveWhenFarAway(false);
+
+        drone.setAware(false); // NoAI pour contrôle manuel
 
         goldenDroneEntityUUID = drone.getUniqueId();
 
+        // Définit une vitesse initiale
+        double angle = random.nextDouble() * Math.PI * 2;
+
+        double speed = 0.15;
+
+        drone.setVelocity(new Vector(Math.cos(angle) * speed, 0.05, Math.sin(angle) * speed));
+
         String msg = ChatUtil.color("&6[DRONE DORÉ] &eUn Drone Doré est apparu près de &f"
-                + target.getName() + " &e! Frappez-le en moins de &f30s &epour gagner &f$" + goldenDroneReward + " &e!");
+
+                + goldenDroneTarget.getName() + " &e! Frappez-le en moins de &f30s &epour gagner &f$" + goldenDroneReward + " &e!");
+
         Bukkit.getOnlinePlayers().forEach(p -> {
+
             p.sendMessage(msg);
+
             p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL, 1.0f, 1.5f);
+
         });
 
         // Mouvement continu + timer 30s
+
         final UUID droneUUID = goldenDroneEntityUUID;
+
         goldenDroneTask = new BukkitRunnable() {
+
             int ticks = 0;
+
+            final double baseSpeed = 0.15;
+
             @Override
+
             public void run() {
-                ticks += 4; // appelé toutes les 4 ticks
+
+                ticks += 2; // appelé toutes les 2 ticks
+
                 Entity entity = Bukkit.getEntity(droneUUID);
 
                 if (entity == null || !entity.isValid()) {
+
                     expireGoldenDrone(false);
+
                     cancel();
+
                     return;
+
                 }
 
-                if (ticks >= 600) { // 30 secondes (600 ticks)
+                if (ticks >= 600) { // 30 secondes
+
                     expireGoldenDrone(true);
+
                     entity.remove();
+
                     cancel();
+
                     return;
+
                 }
 
-                // Maintient la vitesse linéaire (les entités ralentissent avec la friction)
+                // Maintient la vitesse constante dans une direction circulaire
+
                 Vector vel = entity.getVelocity();
+
                 double hSpeed = Math.sqrt(vel.getX() * vel.getX() + vel.getZ() * vel.getZ());
-                if (hSpeed < 0.08) {
-                    double norm = speed / Math.max(hSpeed, 0.01);
-                    entity.setVelocity(new Vector(vel.getX() * norm, 0, vel.getZ() * norm));
+
+                // Ajuste la vitesse si elle est trop faible
+                if (hSpeed < baseSpeed * 0.8) {
+
+                    double angle = Math.atan2(vel.getZ(), vel.getX());
+
+                    entity.setVelocity(new Vector(
+
+                            Math.cos(angle) * baseSpeed,
+
+                            vel.getY(),
+
+                            Math.sin(angle) * baseSpeed
+
+                    ));
+
+                } else if (hSpeed > baseSpeed * 1.2) {
+
+                    // Réduit la vitesse si trop élevée
+                    double norm = baseSpeed / hSpeed;
+
+                    entity.setVelocity(new Vector(
+
+                            vel.getX() * norm,
+
+                            vel.getY(),
+
+                            vel.getZ() * norm
+
+                    ));
+
                 }
+
             }
-        }.runTaskTimer(plugin, 4L, 4L);
-    }
 
-    private void expireGoldenDrone(boolean timeout) {
-        goldenDroneEntityUUID = null;
-        goldenDroneReward     = 0;
-        if (goldenDroneTask != null) { goldenDroneTask.cancel(); goldenDroneTask = null; }
+        }.runTaskTimer(plugin, 2L, 2L);
 
-        if (timeout) {
-            Bukkit.getOnlinePlayers().forEach(p ->
-                    p.sendMessage(ChatUtil.colored("&7[Drone Doré] Personne n'a attrapé le drone à temps..."))
-            );
-        }
-        scheduleNextGoldenDrone();
     }
 
     /**
-     * Appelé par GoldenDroneListener quand le drone est frappé.
+
+     * Calcule la récompense du drone doré basée sur la progression du joueur.
+
      */
+
+    private int calculateDroneReward(PlayerData data) {
+
+        if (data == null) {
+
+            return 500 + random.nextInt(500); // Base par défaut
+        }
+
+        int baseReward = 500 + random.nextInt(500); // 500-1000
+
+        // Bonus pour le niveau de sac (au-dessus de 3)
+
+        if (data.getBagLevel() > 3) {
+
+            baseReward += (data.getBagLevel() - 3) * 500;
+
+        }
+
+        // Bonus pour le niveau d'outil (au-dessus de 2)
+
+        if (data.getToolLevel() > 2) {
+
+            baseReward += (data.getToolLevel() - 2) * 300;
+
+        }
+
+        // Bonus pour le niveau d'énergie (au-dessus de 2)
+
+        if (data.getEnergyLevel() > 2) {
+
+            baseReward += (data.getEnergyLevel() - 2) * 200;
+
+        }
+
+        return baseReward;
+
+    }
+
+    private void expireGoldenDrone(boolean timeout) {
+
+        goldenDroneEntityUUID = null;
+
+        goldenDroneReward     = 0;
+
+        goldenDroneTarget     = null;
+
+        if (goldenDroneTask != null) { goldenDroneTask.cancel(); goldenDroneTask = null; }
+
+        if (timeout) {
+
+            Bukkit.getOnlinePlayers().forEach(p ->
+
+                    p.sendMessage(ChatUtil.colored("&7[Drone Doré] Personne n'a attrapé le drone à temps..."))
+
+            );
+
+        }
+
+        scheduleNextGoldenDrone();
+
+    }
+
+    /**
+
+     * Appelé par GoldenDroneListener quand le drone est frappé.
+
+     */
+
     public boolean claimGoldenDrone(Player player, UUID entityUUID) {
+
         if (goldenDroneEntityUUID == null || !goldenDroneEntityUUID.equals(entityUUID)) return false;
 
         int reward = goldenDroneReward;
+
         goldenDroneEntityUUID = null;
+
         goldenDroneReward     = 0;
+
+        goldenDroneTarget     = null;
+
         if (goldenDroneTask != null) { goldenDroneTask.cancel(); goldenDroneTask = null; }
 
         Entity drone = Bukkit.getEntity(entityUUID);
+
         if (drone != null) drone.remove();
 
         plugin.getEconomyManager().credit(player, reward);
+
         player.sendMessage(ChatUtil.colored("&6✦ Vous avez abattu le Drone Doré ! +$" + reward + " ✦"));
+
         Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+
                 p.sendMessage(ChatUtil.colored("&6[Drone Doré] &f" + player.getName()
+
                         + " &6a remporté &f$" + reward + " &6en abattant le Drone Doré !"))
+
         );
 
         scheduleNextGoldenDrone();
+
         return true;
+
     }
 
     // ── Getters ───────────────────────────────────────────────────────
 
     public boolean isUfoEventActive()      { return ufoEventActive; }
+
     public boolean isUfoMultiplierActive() { return ufoMultiplierActive; }
+
     public boolean isGoldenDroneSpawned()  { return goldenDroneEntityUUID != null; }
+
     public int     getUfoBoxCount()        { return ufoBoxCount.get(); }
+
     public int     getUfoQuota()           { return ufoQuota; }
 
     private String locKey(Location l) {
+
         return l.getBlockX() + ":" + l.getBlockY() + ":" + l.getBlockZ();
+
     }
 
-    // Dans EventManager.java — rendre startUfoEvent accessible depuis l'admin
+    // Rendre startUfoEvent accessible depuis l'admin
     public void forceStartUfoEvent() {
+        if (ufoEventActive) {
+            // On termine proprement l'événement en cours avant d'en relancer un nouveau
+            endUfoEvent(false);
+        }
         startUfoEvent();
     }
+
+
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
 
@@ -2863,7 +3361,6 @@ public class ItemBuilder {
 package fr.cleanthebackyard.cleanTheBackyard;
 
 import fr.cleanthebackyard.cleanTheBackyard.command.AdminCommand;
-//import fr.cleanthebackyard.cleanTheBackyard.command.StatsCommand;
 import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
 import fr.cleanthebackyard.cleanTheBackyard.gui.GuiManager;
 import fr.cleanthebackyard.cleanTheBackyard.listener.*;
@@ -2960,99 +3457,165 @@ public final class CleanTheBackyard extends JavaPlugin {
     public GuiManager        getGuiManager()      { return guiManager; }
 }
 # =============================================
+
 #   CleanTheBackyard - Configuration Principale
+
 # =============================================
 
 game-world: "world"
 
 # Coordonnees de la zone de vente
+
 sell-zone:
+
   x: 81
+
   y: 118
+
   z: -25
+
   radius: 3
 
 # Garage d'ameliorations
+
 garage:
+
   x: 73
+
   y: 118
+
   z: -20
+
   radius: 2.5
 
 # Distributeur automatique
+
 vending-machine:
+
   x: 72
+
   y: 117
+
   z: -31
+
   radius: 2.5
 
 # Boutique de drones (NOUVEAU)
+
 drone-shop:
+
   x: 68
+
   y: 117
+
   z: -15
+
   radius: 2.5
 
-box-sell-price: 50 #à REMETTRE à 5 !!!!!!!---------------------------------------------------------------------------------
+box-sell-price: 5
+
 global-sell-multiplier: 1.0
+
 ufo-multiplier-duration: 120
+
 ufo-event-quota: 500
+
 golden-drone-min: 180
+
 golden-drone-max: 480
+
 ufo-min: 900
+
 ufo-max: 1800
+
 golden-drone-reward-min: 500
+
 golden-drone-reward-max: 2000
+
 box-block: "NOTE_BLOCK"
+
 max-break-distance: 5.0
 
-# Cout en energie par carton casse (NOUVEAU)
-# Combine a la regen reduite, force l'usage du distributeur.
-energy-cost-per-box: 10.0 #à REMETTRE à 3 !!!!!!!---------------------------------------------------------------------------------
+# Cout en energie par carton casse
+
+energy-cost-per-box: 3.0
 
 # =============================================
+
 #   Tables de Progression
+
 # =============================================
 
 bag-upgrades:
+
   - { level: 1, capacity: 10,   cost: 0 }
+
   - { level: 2, capacity: 25,   cost: 100 }
+
   - { level: 3, capacity: 50,   cost: 300 }
+
   - { level: 4, capacity: 100,  cost: 800 }
+
   - { level: 5, capacity: 200,  cost: 2000 }
+
   - { level: 6, capacity: 400,  cost: 5000 }
+
   - { level: 7, capacity: 750,  cost: 12000 }
+
   - { level: 8, capacity: 1500, cost: 30000 }
 
 tool-upgrades:
+
   - { level: 1, cooldown-ms: 1000, boxes-per-collection: 1, cost: 0 }
+
   - { level: 2, cooldown-ms: 750,  boxes-per-collection: 1, cost: 150 }
+
   - { level: 3, cooldown-ms: 500,  boxes-per-collection: 1, cost: 500 }
+
   - { level: 4, cooldown-ms: 350,  boxes-per-collection: 1, cost: 1500 }
+
   - { level: 5, cooldown-ms: 250,  boxes-per-collection: 2, cost: 4000 }
+
   - { level: 6, cooldown-ms: 150,  boxes-per-collection: 2, cost: 10000 }
+
   - { level: 7, cooldown-ms: 100,  boxes-per-collection: 3, cost: 25000 }
+
   - { level: 8, cooldown-ms: 50,   boxes-per-collection: 4, cost: 60000 }
 
 # Regen REDUITE pour rendre le distributeur necessaire
+
 energy-upgrades:
+
   - { level: 1, max-energy: 100, regen-per-sec: 0.5, cost: 0 }
+
   - { level: 2, max-energy: 150, regen-per-sec: 0.8, cost: 200 }
+
   - { level: 3, max-energy: 200, regen-per-sec: 1.0, cost: 600 }
+
   - { level: 4, max-energy: 300, regen-per-sec: 1.5, cost: 1800 }
+
   - { level: 5, max-energy: 450, regen-per-sec: 2.0, cost: 5000 }
+
   - { level: 6, max-energy: 600, regen-per-sec: 3.0, cost: 15000 }
 
 drone-types:
+
   basic:    { name: "Drone Basique",   income: 2,   interval-sec: 10, cost: 500,   bag-level-required: 1, tool-level-required: 1, energy-level-required: 1 }
+
   advanced: { name: "Drone Avance",    income: 8,   interval-sec: 10, cost: 2000,  bag-level-required: 3, tool-level-required: 1, energy-level-required: 1 }
+
   military: { name: "Drone Militaire", income: 25,  interval-sec: 10, cost: 8000,  bag-level-required: 1, tool-level-required: 5, energy-level-required: 1 }
+
   quantum:  { name: "Drone Quantique", income: 100, interval-sec: 10, cost: 50000, bag-level-required: 6, tool-level-required: 6, energy-level-required: 6 }
 
 vending-machine-items:
+
   soda:         { name: "Canette de Soda",       energy-restore: 25,  cost: 10 }
+
   chocolate:    { name: "Barre Chocolatee",      energy-restore: 50,  cost: 20 }
+
   energy-drink: { name: "Boisson Energisante",   energy-restore: -1,  cost: 50 }
+
 
 name: CleanTheBackyard
 version: '${project.version}'
@@ -3067,9 +3630,6 @@ commands:
     description: Commandes admin CleanTheBackyard
     usage: /ctb <stats|money|level|bag|energy|drone|buff|event|sell|reload>
     permission: ctb.admin
-  stats:
-    description: Affiche vos statistiques personnelles
-    usage: /stats
 
 permissions:
   ctb.admin:
