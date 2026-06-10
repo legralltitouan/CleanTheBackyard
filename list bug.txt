@@ -1,10 +1,6 @@
-- retirer tout les box de l'OVNI au bout de 30secondes,
-- problème de gestion des effet nocif de l'energy basse, il faut encore plus réduire la régène de l'énergie, aussi si on est à cour d'énergy (<5), il faut que l'on voit moins bien comme blindness, slowness qui est déjà, mais que si on remonde à au dessus de 25, on enlève les effects.
-- le golden drone ne bouge pas, et il faut que la valeur du drone à gagner soit proportionnel à sa progression
+- il faut que la valeur du drone dorée à gagner soit proportionnel à sa progression ainsi que les caisses récupérable dans l'event UFO
 - l'amélioration de l'outil qui permet de prendre plusieurs box en meme temps est pas bien fait, pour lui une box va donner plus alors que je veux que ce soit une augmentation du rayon de prise des box qui se fasse. 
 - faire en sorte que il n'y est pas de mob hostille, que l'on puisse pas prendre de dégat ni perdre de la nourriture(ou que la nourriture soit synchro avec notre energy)
-- retirer la commande /stats, car la commande /ctb stats existe déjà
-
 
 
 - faire en sorte que ce soit des drones réel qui se déplace pour prendre les box et les vendres
