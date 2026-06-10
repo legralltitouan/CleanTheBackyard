@@ -1,0 +1,3132 @@
+package fr.cleanthebackyard.cleanTheBackyard.command;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.Bukkit;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandExecutor;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class AdminCommand implements CommandExecutor, TabCompleter {
+
+    private final CleanTheBackyard plugin;
+
+    public AdminCommand(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @Override
+    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
+                             @NotNull String label, String[] args) {
+        if (args.length == 0) {
+            sendHelp(sender);
+            return true;
+        }
+
+        switch (args[0].toLowerCase()) {
+            case "stats"  -> cmdStats(sender, args);
+            case "money"  -> cmdMoney(sender, args);
+            case "level"  -> cmdLevel(sender, args);
+            case "bag"    -> cmdBag(sender, args);
+            case "energy" -> cmdEnergy(sender, args);
+            case "drone"  -> cmdDrone(sender, args);
+            case "buff"   -> cmdBuff(sender, args);
+            case "event"  -> cmdEvent(sender, args);
+            case "sell"   -> cmdSell(sender, args);
+            case "reload" -> cmdReload(sender);
+            default       -> sendHelp(sender);
+        }
+        return true;
+    }
+
+    // ── /ctb stats [player] ───────────────────────────────────────────
+
+    private void cmdStats(CommandSender sender, String[] args) {
+        Player target = resolveTarget(sender, args, 1);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        sender.sendMessage(ChatUtil.color("&8══ &aStats de &f" + target.getName() + " &8══"));
+        sender.sendMessage(ChatUtil.color("&7Solde          : &f$" + String.format("%.0f", data.getBalance())));
+        sender.sendMessage(ChatUtil.color("&7Cartons cassés : &f" + data.getTotalBoxesBroken()));
+        sender.sendMessage(ChatUtil.color("&7Sac            : &f" + data.getCurrentBoxes() + "/" + plugin.getBoxManager().getBagCapacity(data.getBagLevel()) + " (Niv " + data.getBagLevel() + ")"));
+        sender.sendMessage(ChatUtil.color("&7Outil          : &fNiv " + data.getToolLevel()));
+        sender.sendMessage(ChatUtil.color("&7Énergie        : &f" + String.format("%.0f", data.getCurrentEnergy()) + "/" + plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel()) + " (Niv " + data.getEnergyLevel() + ")"));
+        sender.sendMessage(ChatUtil.color("&7Drones         : &f" + data.getOwnedDrones()));
+        sender.sendMessage(ChatUtil.color("&7Buff x2 vente  : &f" + (data.hasDoubleSell() ? "&aActif" : "&cInactif")));
+        sender.sendMessage(ChatUtil.color("&7Énergie illim. : &f" + (data.hasUnlimitedEnergy() ? "&aActive" : "&cInactive")));
+        sender.sendMessage(ChatUtil.color("&8══════════════════════"));
+    }
+
+    // ── /ctb money <give|set|take> <player> <amount> ─────────────────
+
+    private void cmdMoney(CommandSender sender, String[] args) {
+
+        if (!sender.hasPermission("ctb.admin.money")) {
+            sender.sendMessage(ChatUtil.color("&cVous n'avez pas la permission.")); return;
+        }
+
+        // args: money <give|set|take> <player> <amount>
+        if (args.length < 4) { sender.sendMessage(usage("money give|set|take <joueur> <montant>")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        double amount;
+        try { amount = Double.parseDouble(args[3]); } catch (NumberFormatException e) {
+            sender.sendMessage(ChatUtil.color("&cMontant invalide : " + args[3]));
+            return;
+        }
+        if (amount <= 0) { sender.sendMessage(ChatUtil.color("&cLe montant doit être positif.")); return; }
+
+        switch (args[1].toLowerCase()) {
+            case "give" -> {
+                data.addBalance(amount);
+                sender.sendMessage(ChatUtil.color("&a+$" + String.format("%.0f", amount) + " &fdonné à &a" + target.getName()));
+                target.sendMessage(ChatUtil.color("&a[Admin] Vous avez reçu &f$" + String.format("%.0f", amount) + " &a!"));
+            }
+            case "take" -> {
+                if (!data.removeBalance(amount)) {
+                    sender.sendMessage(ChatUtil.color("&c" + target.getName() + " n'a pas assez d'argent (solde : $" + String.format("%.0f", data.getBalance()) + ")"));
+                    return;
+                }
+                sender.sendMessage(ChatUtil.color("&c-$" + String.format("%.0f", amount) + " &fprélevé à &c" + target.getName()));
+                target.sendMessage(ChatUtil.color("&c[Admin] &f$" + String.format("%.0f", amount) + " &cretirés de votre compte."));
+            }
+            case "set" -> {
+                data.setBalance(amount);
+                sender.sendMessage(ChatUtil.color("&fSolde de &a" + target.getName() + " &fdéfini à &f$" + String.format("%.0f", amount)));
+                target.sendMessage(ChatUtil.color("&7[Admin] Votre solde a été défini à &f$" + String.format("%.0f", amount)));
+            }
+            default -> sender.sendMessage(usage("money give|set|take <joueur> <montant>"));
+        }
+    }
+
+    // ── /ctb level <bag|tool|energy> <player> <level> ────────────────
+
+    private void cmdLevel(CommandSender sender, String[] args) {
+        if (args.length < 4) { sender.sendMessage(usage("level bag|tool|energy <joueur> <niveau>")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        int level;
+        try { level = Integer.parseInt(args[3]); } catch (NumberFormatException e) {
+            sender.sendMessage(ChatUtil.color("&cNiveau invalide : " + args[3])); return;
+        }
+        if (level < 1) { sender.sendMessage(ChatUtil.color("&cLe niveau doit être ≥ 1.")); return; }
+
+        switch (args[1].toLowerCase()) {
+            case "bag" -> {
+                int max = plugin.getPluginConfig().getBagUpgrades().size();
+                if (level > max) { sender.sendMessage(ChatUtil.color("&cNiveau max du sac : " + max)); return; }
+                data.setBagLevel(level);
+                notifyLevelChange(sender, target, "Sac", level);
+            }
+            case "tool" -> {
+                int max = plugin.getPluginConfig().getToolUpgrades().size();
+                if (level > max) { sender.sendMessage(ChatUtil.color("&cNiveau max de l'outil : " + max)); return; }
+                data.setToolLevel(level);
+                notifyLevelChange(sender, target, "Outil", level);
+            }
+            case "energy" -> {
+                int max = plugin.getPluginConfig().getEnergyUpgrades().size();
+                if (level > max) { sender.sendMessage(ChatUtil.color("&cNiveau max de l'énergie : " + max)); return; }
+                data.setEnergyLevel(level);
+                data.setCurrentEnergy(plugin.getBoxManager().getMaxEnergyForLevel(level));
+                notifyLevelChange(sender, target, "Énergie", level);
+            }
+            default -> sender.sendMessage(usage("level bag|tool|energy <joueur> <niveau>"));
+        }
+    }
+
+    private void notifyLevelChange(CommandSender sender, Player target, String type, int level) {
+        sender.sendMessage(ChatUtil.color("&a" + type + " de &f" + target.getName() + " &adéfini au niveau &f" + level));
+        target.sendMessage(ChatUtil.color("&7[Admin] Votre niveau &f" + type + " &7a été défini à &f" + level));
+    }
+
+    // ── /ctb bag <fill|clear|set> <player> [amount] ──────────────────
+
+    private void cmdBag(CommandSender sender, String[] args) {
+        if (args.length < 3) { sender.sendMessage(usage("bag fill|clear|set <joueur> [quantité]")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        switch (args[1].toLowerCase()) {
+            case "fill" -> {
+                int cap = plugin.getBoxManager().getBagCapacity(data.getBagLevel());
+                data.setCurrentBoxes(cap);
+                sender.sendMessage(ChatUtil.color("&aSac de &f" + target.getName() + " &arempli (" + cap + "/" + cap + ")"));
+                target.sendMessage(ChatUtil.color("&7[Admin] Votre sac a été rempli."));
+            }
+            case "clear" -> {
+                data.clearBag();
+                sender.sendMessage(ChatUtil.color("&aSac de &f" + target.getName() + " &avidé."));
+                target.sendMessage(ChatUtil.color("&7[Admin] Votre sac a été vidé."));
+            }
+            case "set" -> {
+                if (args.length < 4) { sender.sendMessage(usage("bag set <joueur> <quantité>")); return; }
+                int amount;
+                try { amount = Integer.parseInt(args[3]); } catch (NumberFormatException e) {
+                    sender.sendMessage(ChatUtil.color("&cQuantité invalide.")); return;
+                }
+                int cap = plugin.getBoxManager().getBagCapacity(data.getBagLevel());
+                data.setCurrentBoxes(Math.min(amount, cap));
+                sender.sendMessage(ChatUtil.color("&aSac de &f" + target.getName() + " &adéfini à &f" + Math.min(amount, cap)));
+            }
+            default -> sender.sendMessage(usage("bag fill|clear|set <joueur> [quantité]"));
+        }
+    }
+
+    // ── /ctb energy <fill|set|drain> <player> [amount] ───────────────
+
+    private void cmdEnergy(CommandSender sender, String[] args) {
+        if (args.length < 3) { sender.sendMessage(usage("energy fill|set|drain <joueur> [valeur]")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel());
+
+        switch (args[1].toLowerCase()) {
+            case "fill" -> {
+                data.setCurrentEnergy(maxEnergy);
+                plugin.getBoxManager().removeFatigue(target, data);
+                sender.sendMessage(ChatUtil.color("&aÉnergie de &f" + target.getName() + " &aremplie."));
+                target.sendMessage(ChatUtil.color("&7[Admin] Votre énergie a été remplie."));
+            }
+            case "drain" -> {
+                data.setCurrentEnergy(0);
+                plugin.getBoxManager().applyFatigue(target, data);
+                sender.sendMessage(ChatUtil.color("&cÉnergie de &f" + target.getName() + " &cdrainée."));
+                target.sendMessage(ChatUtil.color("&7[Admin] Votre énergie a été drainée."));
+            }
+            case "set" -> {
+                if (args.length < 4) { sender.sendMessage(usage("energy set <joueur> <valeur>")); return; }
+                double val;
+                try { val = Double.parseDouble(args[3]); } catch (NumberFormatException e) {
+                    sender.sendMessage(ChatUtil.color("&cValeur invalide.")); return;
+                }
+                data.setCurrentEnergy(Math.min(val, maxEnergy));
+                sender.sendMessage(ChatUtil.color("&aÉnergie de &f" + target.getName() + " &adéfinie à &f" + String.format("%.0f", val)));
+            }
+            default -> sender.sendMessage(usage("energy fill|set|drain <joueur> [valeur]"));
+        }
+    }
+
+    // ── /ctb drone <give|remove> <player> <key> ──────────────────────
+
+    private void cmdDrone(CommandSender sender, String[] args) {
+        if (args.length < 4) { sender.sendMessage(usage("drone give|remove <joueur> <clé_drone>")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        String droneKey = args[3].toLowerCase();
+        boolean exists = plugin.getPluginConfig().getDroneConfigs().stream()
+                .anyMatch(d -> d.key().equals(droneKey));
+        if (!exists) {
+            sender.sendMessage(ChatUtil.color("&cDrone inconnu : &f" + droneKey
+                    + " &c| Clés valides : basic, advanced, military, quantum"));
+            return;
+        }
+
+        switch (args[1].toLowerCase()) {
+            case "give" -> {
+                if (data.hasDrone(droneKey)) {
+                    sender.sendMessage(ChatUtil.color("&e" + target.getName() + " possède déjà ce drone."));
+                    return;
+                }
+                data.addDrone(droneKey);
+                sender.sendMessage(ChatUtil.color("&aDrone &f" + droneKey + " &adonné à &f" + target.getName()));
+                target.sendMessage(ChatUtil.color("&7[Admin] Vous avez reçu le drone &f" + droneKey + " &7!"));
+            }
+            case "remove" -> {
+                if (!data.hasDrone(droneKey)) {
+                    sender.sendMessage(ChatUtil.color("&e" + target.getName() + " ne possède pas ce drone."));
+                    return;
+                }
+                data.getOwnedDrones().remove(droneKey);
+                sender.sendMessage(ChatUtil.color("&cDrone &f" + droneKey + " &cretiré à &f" + target.getName()));
+                target.sendMessage(ChatUtil.color("&7[Admin] Le drone &f" + droneKey + " &7vous a été retiré."));
+            }
+            default -> sender.sendMessage(usage("drone give|remove <joueur> <clé_drone>"));
+        }
+    }
+
+    // ── /ctb buff <doublesell|unlimitedenergy> <player> <seconds> ────
+
+    private void cmdBuff(CommandSender sender, String[] args) {
+        if (args.length < 4) { sender.sendMessage(usage("buff doublesell|unlimitedenergy <joueur> <secondes>")); return; }
+
+        Player target = getOnlinePlayer(sender, args[2]);
+        if (target == null) return;
+
+        PlayerData data = plugin.getPlayerDataManager().get(target);
+        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+
+        int seconds;
+        try { seconds = Integer.parseInt(args[3]); } catch (NumberFormatException e) {
+            sender.sendMessage(ChatUtil.color("&cDurée invalide.")); return;
+        }
+        if (seconds <= 0) { sender.sendMessage(ChatUtil.color("&cLa durée doit être > 0.")); return; }
+
+        switch (args[1].toLowerCase()) {
+            case "doublesell" -> {
+                data.setDoubleSell(seconds);
+                sender.sendMessage(ChatUtil.color("&aBuff &ex2 Vente &aappliqué à &f" + target.getName() + " &apendant &f" + seconds + "s"));
+                target.sendMessage(ChatUtil.color("&6[Admin] Buff &ex2 Vente personnel &6activé pendant &f" + seconds + "s &6!"));
+            }
+            case "unlimitedenergy" -> {
+                data.setUnlimitedEnergy(seconds);
+                plugin.getBoxManager().removeFatigue(target, data);
+                sender.sendMessage(ChatUtil.color("&aBuff &bÉnergie Illimitée &aappliqué à &f" + target.getName() + " &apendant &f" + seconds + "s"));
+                target.sendMessage(ChatUtil.color("&6[Admin] Buff &bÉnergie Illimitée &6activé pendant &f" + seconds + "s &6!"));
+            }
+            default -> sender.sendMessage(usage("buff doublesell|unlimitedenergy <joueur> <secondes>"));
+        }
+    }
+
+    // ── /ctb event <drone|ufo> ────────────────────────────────────────
+
+    private void cmdEvent(CommandSender sender, String[] args) {
+        if (args.length < 2) { sender.sendMessage(usage("event drone|ufo")); return; }
+
+        switch (args[1].toLowerCase()) {
+            case "drone" -> {
+                if (plugin.getEventManager().isGoldenDroneSpawned()) {
+                    sender.sendMessage(ChatUtil.color("&eUn Drone Doré est déjà actif !"));
+                    return;
+                }
+                plugin.getEventManager().spawnGoldenDrone();
+                sender.sendMessage(ChatUtil.color("&6[Admin] Drone Doré invoqué avec succès !"));
+            }
+            case "ufo" -> {
+                if (plugin.getEventManager().isUfoEventActive()) {
+                    sender.sendMessage(ChatUtil.color("&eUn événement OVNI est déjà en cours !"));
+                    return;
+                }
+                // Accès via la méthode publique
+                plugin.getEventManager().forceStartUfoEvent();
+                sender.sendMessage(ChatUtil.color("&5[Admin] Événement OVNI déclenché avec succès !"));
+            }
+            default -> sender.sendMessage(usage("event drone|ufo"));
+        }
+    }
+
+    // ── /ctb sell <player> ────────────────────────────────────────────
+
+    private void cmdSell(CommandSender sender, String[] args) {
+        Player target = resolveTarget(sender, args, 1);
+        if (target == null) return;
+
+        plugin.getEconomyManager().sellBag(target);
+        if (!(sender instanceof Player p) || !p.equals(target)) {
+            sender.sendMessage(ChatUtil.color("&aSac de &f" + target.getName() + " &avendu."));
+        }
+    }
+
+    // ── /ctb reload ───────────────────────────────────────────────────
+
+    private void cmdReload(CommandSender sender) {
+        plugin.reloadConfig();
+        plugin.getPlayerDataManager().saveAll();
+        sender.sendMessage(ChatUtil.color("&aConfiguration rechargée et données sauvegardées."));
+    }
+
+    // ── Tab Completion ────────────────────────────────────────────────
+
+    @Override
+    public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
+                                      @NotNull String label, String[] args) {
+        List<String> completions = new ArrayList<>();
+        List<String> playerNames = Bukkit.getOnlinePlayers().stream()
+                .map(Player::getName).toList();
+        List<String> droneKeys = plugin.getPluginConfig().getDroneConfigs().stream()
+                .map(d -> d.key()).toList();
+
+        if (args.length == 1) {
+            completions.addAll(List.of("stats", "money", "level", "bag", "energy", "drone", "buff", "event", "sell", "reload"));
+        } else if (args.length == 2) {
+            completions.addAll(switch (args[0].toLowerCase()) {
+                case "money"  -> List.of("give", "set", "take");
+                case "level"  -> List.of("bag", "tool", "energy");
+                case "bag"    -> List.of("fill", "clear", "set");
+                case "energy" -> List.of("fill", "set", "drain");
+                case "drone"  -> List.of("give", "remove");
+                case "buff"   -> List.of("doublesell", "unlimitedenergy");
+                case "event"  -> List.of("drone", "ufo");
+                case "stats", "sell" -> playerNames;
+                default -> List.of();
+            });
+        } else if (args.length == 3) {
+            completions.addAll(switch (args[0].toLowerCase()) {
+                case "money", "level", "bag", "energy", "drone", "buff" -> playerNames;
+                default -> List.of();
+            });
+        } else if (args.length == 4) {
+            if (args[0].equalsIgnoreCase("drone")) {
+                completions.addAll(droneKeys);
+            } else if (args[0].equalsIgnoreCase("money")) {
+                completions.addAll(List.of("100", "500", "1000", "5000"));
+            } else if (args[0].equalsIgnoreCase("level")) {
+                completions.addAll(List.of("1", "2", "3", "4", "5", "6", "7", "8"));
+            } else if (args[0].equalsIgnoreCase("buff")) {
+                completions.addAll(List.of("60", "180", "300", "600"));
+            }
+        }
+
+        String filter = args[args.length - 1].toLowerCase();
+        return completions.stream()
+                .filter(s -> s.toLowerCase().startsWith(filter))
+                .toList();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Résout la cible : si args[argIndex] existe → joueur en ligne, sinon → sender si Player.
+     */
+    private Player resolveTarget(CommandSender sender, String[] args, int argIndex) {
+        if (args.length > argIndex) {
+            return getOnlinePlayer(sender, args[argIndex]);
+        }
+        if (sender instanceof Player p) return p;
+        sender.sendMessage(ChatUtil.color("&cSpécifiez un joueur."));
+        return null;
+    }
+
+    private Player getOnlinePlayer(CommandSender sender, String name) {
+        Player p = Bukkit.getPlayerExact(name);
+        if (p == null) sender.sendMessage(ChatUtil.color("&cJoueur introuvable ou hors ligne : &f" + name));
+        return p;
+    }
+
+    private String usage(String syntax) {
+        return ChatUtil.color("&cUsage : &f/ctb " + syntax);
+    }
+
+    private void sendHelp(CommandSender sender) {
+        sender.sendMessage(ChatUtil.color("&8══ &6CTB Admin &8══"));
+        sender.sendMessage(ChatUtil.color("&e/ctb stats &7[joueur]"));
+        sender.sendMessage(ChatUtil.color("&e/ctb money &7give|set|take <joueur> <montant>"));
+        sender.sendMessage(ChatUtil.color("&e/ctb level &7bag|tool|energy <joueur> <niveau>"));
+        sender.sendMessage(ChatUtil.color("&e/ctb bag &7fill|clear|set <joueur> [quantité]"));
+        sender.sendMessage(ChatUtil.color("&e/ctb energy &7fill|set|drain <joueur> [valeur]"));
+        sender.sendMessage(ChatUtil.color("&e/ctb drone &7give|remove <joueur> <clé>"));
+        sender.sendMessage(ChatUtil.color("&e/ctb buff &7doublesell|unlimitedenergy <joueur> <secondes>"));
+        sender.sendMessage(ChatUtil.color("&e/ctb event &7drone|ufo"));
+        sender.sendMessage(ChatUtil.color("&e/ctb sell &7[joueur]"));
+        sender.sendMessage(ChatUtil.color("&e/ctb reload"));
+        sender.sendMessage(ChatUtil.color("&8══════════════════"));
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.config;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.FileConfiguration;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Centralise l'acces a toutes les valeurs de config.yml.
+ * Permet un refactoring facile et evite les magic strings partout dans le code.
+ */
+public class PluginConfig {
+
+    private final CleanTheBackyard plugin;
+    private final FileConfiguration cfg;
+
+    public PluginConfig(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        this.cfg    = plugin.getConfig();
+    }
+
+    // ── World & Zones (REMPLACE la section existante) ────────────────
+
+    public String getGameWorldName() {
+        return cfg.getString("game-world", "world");
+    }
+
+    public World getGameWorld() {
+        return plugin.getServer().getWorld(getGameWorldName());
+    }
+
+    public Location getSellZoneCenter() {
+        return new Location(getGameWorld(),
+                cfg.getDouble("sell-zone.x"),
+                cfg.getDouble("sell-zone.y"),
+                cfg.getDouble("sell-zone.z"));
+    }
+    public double getSellZoneRadius() { return cfg.getDouble("sell-zone.radius", 3.0); }
+
+    public Location getGarageLocation() {
+        return new Location(getGameWorld(),
+                cfg.getDouble("garage.x"),
+                cfg.getDouble("garage.y"),
+                cfg.getDouble("garage.z"));
+    }
+    public double getGarageRadius() { return cfg.getDouble("garage.radius", 2.5); }
+
+    public Location getVendingMachineLocation() {
+        return new Location(getGameWorld(),
+                cfg.getDouble("vending-machine.x"),
+                cfg.getDouble("vending-machine.y"),
+                cfg.getDouble("vending-machine.z"));
+    }
+    public double getVendingMachineRadius() { return cfg.getDouble("vending-machine.radius", 2.5); }
+
+    public Location getDroneShopLocation() {
+        return new Location(getGameWorld(),
+                cfg.getDouble("drone-shop.x"),
+                cfg.getDouble("drone-shop.y"),
+                cfg.getDouble("drone-shop.z"));
+    }
+    public double getDroneShopRadius() { return cfg.getDouble("drone-shop.radius", 2.5); }
+
+    // ── Gameplay ──────────────────────────────────────────────────────
+
+    public double getBoxSellPrice()        { return cfg.getDouble("box-sell-price", 5.0); }
+    public double getGlobalSellMultiplier(){ return cfg.getDouble("global-sell-multiplier", 1.0); }
+    public void   setGlobalSellMultiplier(double v){ cfg.set("global-sell-multiplier", v); }
+    public int    getUfoMultiplierDuration(){ return cfg.getInt("ufo-multiplier-duration", 120); }
+    public int    getUfoEventQuota()       { return cfg.getInt("ufo-event-quota", 500); }
+    public int    getGoldenDroneMin()      { return cfg.getInt("golden-drone-min", 180); }
+    public int    getGoldenDroneMax()      { return cfg.getInt("golden-drone-max", 480); }
+    public int    getUfoMin()              { return cfg.getInt("ufo-min", 900); }
+    public int    getUfoMax()              { return cfg.getInt("ufo-max", 1800); }
+    public int    getGoldenDroneRewardMin(){ return cfg.getInt("golden-drone-reward-min", 500); }
+    public int    getGoldenDroneRewardMax(){ return cfg.getInt("golden-drone-reward-max", 2000); }
+    public String getBoxBlock()            { return cfg.getString("box-block", "NOTE_BLOCK"); }
+    public double getMaxBreakDistance()    { return cfg.getDouble("max-break-distance", 5.0); }
+    public double getEnergyCostPerBox() { return cfg.getDouble("energy-cost-per-box", 3.0); }
+
+    // ── Upgrade Tables ────────────────────────────────────────────────
+
+    public record BagUpgrade(int level, int capacity, long cost) {}
+    public record ToolUpgrade(int level, long cooldownMs, int boxesPerCollection, long cost) {}
+    public record EnergyUpgrade(int level, int maxEnergy, double regenPerSec, long cost) {}
+
+    public List<BagUpgrade> getBagUpgrades() {
+        List<BagUpgrade> list = new ArrayList<>();
+        List<?> raw = cfg.getList("bag-upgrades");
+        if (raw == null) return list;
+        for (Object obj : raw) {
+            if (obj instanceof java.util.Map<?,?> map) {
+                int level    = toInt(map.get("level"), 1);
+                int capacity = toInt(map.get("capacity"), 10);
+                long cost    = toLong(map.get("cost"), 0);
+                list.add(new BagUpgrade(level, capacity, cost));
+            }
+        }
+        return list;
+    }
+
+    public List<ToolUpgrade> getToolUpgrades() {
+        List<ToolUpgrade> list = new ArrayList<>();
+        List<?> raw = cfg.getList("tool-upgrades");
+        if (raw == null) return list;
+        for (Object obj : raw) {
+            if (obj instanceof java.util.Map<?,?> map) {
+                int level              = toInt(map.get("level"), 1);
+                long cooldownMs        = toLong(map.get("cooldown-ms"), 1000);
+                int boxesPerCollection = toInt(map.get("boxes-per-collection"), 1);
+                long cost              = toLong(map.get("cost"), 0);
+                list.add(new ToolUpgrade(level, cooldownMs, boxesPerCollection, cost));
+            }
+        }
+        return list;
+    }
+
+    public List<EnergyUpgrade> getEnergyUpgrades() {
+        List<EnergyUpgrade> list = new ArrayList<>();
+        List<?> raw = cfg.getList("energy-upgrades");
+        if (raw == null) return list;
+        for (Object obj : raw) {
+            if (obj instanceof java.util.Map<?,?> map) {
+                int level       = toInt(map.get("level"), 1);
+                int maxEnergy   = toInt(map.get("max-energy"), 100);
+                double regen    = toDouble(map.get("regen-per-sec"), 1.0);
+                long cost       = toLong(map.get("cost"), 0);
+                list.add(new EnergyUpgrade(level, maxEnergy, regen, cost));
+            }
+        }
+        return list;
+    }
+
+    // ── Drone Config ──────────────────────────────────────────────────
+
+    public record DroneConfig(
+            String key, String name, double income,
+            int intervalSec, long cost,
+            int bagLevelRequired, int toolLevelRequired, int energyLevelRequired
+    ) {}
+
+    public List<DroneConfig> getDroneConfigs() {
+        List<DroneConfig> list = new ArrayList<>();
+        ConfigurationSection section = cfg.getConfigurationSection("drone-types");
+        if (section == null) return list;
+        for (String key : section.getKeys(false)) {
+            ConfigurationSection d = section.getConfigurationSection(key);
+            if (d == null) continue;
+            list.add(new DroneConfig(
+                    key,
+                    d.getString("name", key),
+                    d.getDouble("income", 2),
+                    d.getInt("interval-sec", 10),
+                    d.getLong("cost", 500),
+                    d.getInt("bag-level-required", 1),
+                    d.getInt("tool-level-required", 1),
+                    d.getInt("energy-level-required", 1)
+            ));
+        }
+        return list;
+    }
+
+    // ── Vending Machine Items ─────────────────────────────────────────
+
+    public record VendingItem(String key, String name, int energyRestore, long cost) {}
+
+    public List<VendingItem> getVendingItems() {
+        List<VendingItem> list = new ArrayList<>();
+        ConfigurationSection section = cfg.getConfigurationSection("vending-machine-items");
+        if (section == null) return list;
+        for (String key : section.getKeys(false)) {
+            ConfigurationSection v = section.getConfigurationSection(key);
+            if (v == null) continue;
+            list.add(new VendingItem(
+                    key,
+                    v.getString("name", key),
+                    v.getInt("energy-restore", 25),
+                    v.getLong("cost", 10)
+            ));
+        }
+        return list;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    private int    toInt(Object o, int def)    { return o instanceof Number n ? n.intValue()    : def; }
+    private long   toLong(Object o, long def)  { return o instanceof Number n ? n.longValue()   : def; }
+    private double toDouble(Object o, double d){ return o instanceof Number n ? n.doubleValue() : d; }
+}
+package fr.cleanthebackyard.cleanTheBackyard.data;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
+
+/**
+ * Contient toutes les donnees persistantes d'un joueur.
+ * Charge en cache a la connexion, sauvegarde a la deconnexion et onDisable.
+ */
+public class PlayerData {
+
+    private final UUID uuid;
+    private final String name;
+
+    // ── Economie ──────────────────────────────────────────────────────
+    private double balance;
+    private long   totalEarned;
+    private long   totalBoxesBroken;
+
+    // ── Sac ───────────────────────────────────────────────────────────
+    private int bagLevel;
+    private int currentBoxes;
+
+    // ── Outil ─────────────────────────────────────────────────────────
+    private int  toolLevel;
+    private long lastBreakTime; // epoch ms, anti-cooldown
+
+    // ── Energie ───────────────────────────────────────────────────────
+    private int  energyLevel;
+    private double currentEnergy;
+
+    // ── Drones ────────────────────────────────────────────────────────
+    private final Set<String> ownedDrones; // cles depuis config (basic, advanced...)
+
+    // ── Stats Session ─────────────────────────────────────────────────
+    private long sessionBoxesBroken;
+    private long sessionEarned;
+
+    // ── Event ───────────────────────────────────────────────── :
+    private long unlimitedEnergyUntil = 0L;  // epoch ms
+    private long doubleSellUntil      = 0L;  // epoch ms
+
+    // ── Constructeur (nouveau joueur) ─────────────────────────────────
+
+    public PlayerData(UUID uuid, String name) {
+        this.uuid            = uuid;
+        this.name            = name;
+        this.balance         = 0.0;
+        this.totalEarned     = 0L;
+        this.totalBoxesBroken= 0L;
+        this.bagLevel        = 1;
+        this.currentBoxes    = 0;
+        this.toolLevel       = 1;
+        this.lastBreakTime   = 0L;
+        this.energyLevel     = 1;
+        this.currentEnergy   = 100.0;
+        this.ownedDrones     = new HashSet<>();
+        this.sessionBoxesBroken = 0L;
+        this.sessionEarned      = 0L;
+    }
+
+    // ── Getters / Setters ──────────────────────────────────────────────
+
+    public UUID   getUuid()           { return uuid; }
+    public String getName()           { return name; }
+
+    public double getBalance()        { return balance; }
+    public void   setBalance(double v){ this.balance = Math.max(0, v); }
+    public void   addBalance(double v){ this.balance += v; totalEarned += (long) v; sessionEarned += (long) v; }
+    public boolean removeBalance(double v) {
+        if (balance < v) return false;
+        balance -= v;
+        return true;
+    }
+
+    public long getTotalEarned()      { return totalEarned; }
+    public long getTotalBoxesBroken() { return totalBoxesBroken; }
+    public void incrementBoxesBroken(){ totalBoxesBroken++; sessionBoxesBroken++; }
+
+    public int  getBagLevel()         { return bagLevel; }
+    public void setBagLevel(int lvl)  { this.bagLevel = lvl; }
+    public int  getCurrentBoxes()     { return currentBoxes; }
+    public void setCurrentBoxes(int v){ this.currentBoxes = v; }
+    public void addBox()              { this.currentBoxes++; }
+    public void clearBag()            { this.currentBoxes = 0; }
+
+    public int  getToolLevel()        { return toolLevel; }
+    public void setToolLevel(int lvl) { this.toolLevel = lvl; }
+    public long getLastBreakTime()    { return lastBreakTime; }
+    public void setLastBreakTime(long t){ this.lastBreakTime = t; }
+
+    public int    getEnergyLevel()      { return energyLevel; }
+    public void   setEnergyLevel(int v) { this.energyLevel = v; }
+    public double getCurrentEnergy()    { return currentEnergy; }
+    public void   setCurrentEnergy(double v){ this.currentEnergy = v; }
+    public void   addEnergy(double v)   { this.currentEnergy += v; }
+    public void   removeEnergy(double v){ this.currentEnergy = Math.max(0, currentEnergy - v); }
+
+    public Set<String> getOwnedDrones() { return ownedDrones; }
+    public boolean hasDrone(String key) { return ownedDrones.contains(key); }
+    public void addDrone(String key)    { ownedDrones.add(key); }
+
+    public long getSessionBoxesBroken() { return sessionBoxesBroken; }
+    public long getSessionEarned()      { return sessionEarned; }
+    public void resetSession()          { sessionBoxesBroken = 0; sessionEarned = 0; }
+
+    // Getters/Setters à ajouter en fin de classe :
+    public boolean hasUnlimitedEnergy() { return System.currentTimeMillis() < unlimitedEnergyUntil; }
+    public void setUnlimitedEnergy(int durationSeconds) {
+        this.unlimitedEnergyUntil = System.currentTimeMillis() + durationSeconds * 1000L;
+    }
+
+    public boolean hasDoubleSell() { return System.currentTimeMillis() < doubleSellUntil; }
+    public void setDoubleSell(int durationSeconds) {
+        this.doubleSellUntil = System.currentTimeMillis() + durationSeconds * 1000L;
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * Registre central des GUIs ouverts.
+ * Associe chaque joueur a son GUI actif pour router les clics correctement.
+ */
+public class GuiManager {
+
+    public enum GuiType { UPGRADE, VENDING_MACHINE, DRONE_SHOP }
+
+    private final CleanTheBackyard plugin;
+    private final Map<UUID, GuiType> openGuis = new HashMap<>();
+
+    private final UpgradeGui         upgradeGui;
+    private final VendingMachineGui   vendingMachineGui;
+    private final ShopGui             shopGui;
+
+    public GuiManager(CleanTheBackyard plugin) {
+        this.plugin           = plugin;
+        this.upgradeGui       = new UpgradeGui(plugin);
+        this.vendingMachineGui = new VendingMachineGui(plugin);
+        this.shopGui          = new ShopGui(plugin);
+    }
+
+    public void openUpgradeGui(Player player) {
+        openGuis.put(player.getUniqueId(), GuiType.UPGRADE);
+        upgradeGui.open(player);
+    }
+
+    public void openVendingMachine(Player player) {
+        openGuis.put(player.getUniqueId(), GuiType.VENDING_MACHINE);
+        vendingMachineGui.open(player);
+    }
+
+    public void openDroneShop(Player player) {
+        openGuis.put(player.getUniqueId(), GuiType.DRONE_SHOP);
+        shopGui.open(player);
+    }
+
+    /**
+     * Route un clic vers le bon GUI.
+     * @return true si le clic a ete pris en charge (annuler l'event).
+     */
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        GuiType type = openGuis.get(player.getUniqueId());
+        if (type == null) return false;
+
+        return switch (type) {
+            case UPGRADE        -> upgradeGui.handleClick(player, event);
+            case VENDING_MACHINE-> vendingMachineGui.handleClick(player, event);
+            case DRONE_SHOP     -> shopGui.handleClick(player, event);
+        };
+    }
+
+    public void onClose(Player player, Inventory inv) {
+        openGuis.remove(player.getUniqueId());
+    }
+
+    public boolean hasOpenGui(Player player) {
+        return openGuis.containsKey(player.getUniqueId());
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+
+import java.util.List;
+
+/**
+ * GUI de la boutique de Drones.
+ */
+public class ShopGui {
+
+    private static final String TITLE = ChatUtil.color("&8[&dBoutique&8] &7Drones Assistants");
+
+    private final CleanTheBackyard plugin;
+
+    public ShopGui(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public void open(Player player) {
+        Inventory inv = Bukkit.createInventory(null, 36, TITLE);
+        buildGui(inv, player);
+        player.openInventory(inv);
+    }
+
+    private void buildGui(Inventory inv, Player player) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+
+        ItemStack glass = new ItemBuilder(Material.PURPLE_STAINED_GLASS_PANE).name(" ").build();
+        for (int i = 0; i < 36; i++) inv.setItem(i, glass);
+
+        List<PluginConfig.DroneConfig> drones = plugin.getPluginConfig().getDroneConfigs();
+        int slot = 2;
+
+        for (PluginConfig.DroneConfig dc : drones) {
+            boolean owned = data != null && data.hasDrone(dc.key());
+            boolean unlocked = data != null
+                    && data.getBagLevel() >= dc.bagLevelRequired()
+                    && data.getToolLevel() >= dc.toolLevelRequired()
+                    && data.getEnergyLevel() >= dc.energyLevelRequired();
+
+            Material mat = owned ? Material.BEACON :
+                    unlocked ? Material.COMPARATOR : Material.BARRIER;
+
+            String status = owned ? "&a[POSSEDE]" :
+                    unlocked ? "&eDisponible" : "&cVerrouille";
+
+            ItemStack item = new ItemBuilder(mat)
+                    .name("&d" + dc.name())
+                    .lore(List.of(
+                            ChatUtil.color("&7Revenu passif : &a+$" + dc.income() + " / " + dc.intervalSec() + "s"),
+                            ChatUtil.color("&7Cout : &f$" + dc.cost()),
+                            " ",
+                            ChatUtil.color("&7Requis : Sac Niv&f " + dc.bagLevelRequired()
+                                    + "&7, Outil Niv&f " + dc.toolLevelRequired()
+                                    + "&7, Energie Niv&f " + dc.energyLevelRequired()),
+                            " ",
+                            ChatUtil.color(status),
+                            ChatUtil.color(owned ? "" : unlocked ? "&aCliquez pour acheter !" : "&cAmeliorez vos stats !")
+                    ))
+                    .build();
+            inv.setItem(slot, item);
+            slot += 3;
+        }
+
+        if (data != null) {
+            ItemStack bal = new ItemBuilder(Material.GOLD_INGOT)
+                    .name("&aSolde : &f$" + String.format("%.0f", data.getBalance()))
+                    .build();
+            inv.setItem(31, bal);
+        }
+    }
+
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        List<PluginConfig.DroneConfig> drones = plugin.getPluginConfig().getDroneConfigs();
+        int slot = event.getRawSlot();
+
+        int idx = 0;
+        int s = 2;
+        for (PluginConfig.DroneConfig dc : drones) {
+            if (slot == s) {
+                plugin.getDroneManager().purchaseDrone(player, dc.key());
+                buildGui(event.getInventory(), player);
+                return true;
+            }
+            s += 3;
+            idx++;
+        }
+        return true;
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+
+import java.util.List;
+
+/**
+ * GUI du Garage d'ameliorations.
+ * 3 colonnes : Sac | Outil | Energie
+ */
+public class UpgradeGui {
+
+    private static final String TITLE = ChatUtil.color("&8[&6Garage&8] &7Ameliorations");
+
+    private final CleanTheBackyard plugin;
+
+    public UpgradeGui(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public void open(Player player) {
+        Inventory inv = Bukkit.createInventory(null, 27, TITLE);
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        buildGui(inv, data);
+        player.openInventory(inv);
+    }
+
+    private void buildGui(Inventory inv, PlayerData data) {
+        // Fond decoratif
+        ItemStack glass = new ItemBuilder(Material.GRAY_STAINED_GLASS_PANE)
+                .name(" ").build();
+        for (int i = 0; i < 27; i++) inv.setItem(i, glass);
+
+        // ── Colonne Sac (slots 2, 11, 20) ─────────────────────────
+        ItemStack bagItem = buildUpgradeItem(
+                Material.CHEST,
+                "&6Ameliorer le Sac",
+                data.getBagLevel(),
+                plugin.getPluginConfig().getBagUpgrades().size(),
+                plugin.getBoxManager().getBagCapacity(data.getBagLevel()),
+                getNextBagCost(data.getBagLevel()),
+                "capacite: " + plugin.getBoxManager().getBagCapacity(data.getBagLevel()) + " cartons",
+                "prochaine: " + getNextBagCapacity(data.getBagLevel()) + " cartons"
+        );
+        inv.setItem(2, bagItem);
+
+        // ── Colonne Outil (slots 4, 13, 22) ──────────────────────
+        ItemStack toolItem = buildUpgradeItem(
+                Material.IRON_PICKAXE,
+                "&bAmeliorer l'Outil",
+                data.getToolLevel(),
+                plugin.getPluginConfig().getToolUpgrades().size(),
+                (int) plugin.getBoxManager().getToolCooldown(data.getToolLevel()),
+                getNextToolCost(data.getToolLevel()),
+                "cooldown: " + plugin.getBoxManager().getToolCooldown(data.getToolLevel()) + "ms",
+                "prochain: " + getNextToolCooldown(data.getToolLevel()) + "ms"
+        );
+        inv.setItem(4, toolItem);
+
+        // ── Colonne Energie (slots 6, 15, 24) ─────────────────────
+        ItemStack energyItem = buildUpgradeItem(
+                Material.GLOWSTONE,
+                "&eAmeliorer l'Energie",
+                data.getEnergyLevel(),
+                plugin.getPluginConfig().getEnergyUpgrades().size(),
+                plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel()),
+                getNextEnergyCost(data.getEnergyLevel()),
+                "max: " + plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel()),
+                "regen: " + plugin.getBoxManager().getEnergyRegenForLevel(data.getEnergyLevel()) + "/s"
+        );
+        inv.setItem(6, energyItem);
+
+        // Solde
+        ItemStack balanceItem = new ItemBuilder(Material.GOLD_INGOT)
+                .name("&aSolde: &f$" + String.format("%.0f", data.getBalance()))
+                .build();
+        inv.setItem(22, balanceItem);
+    }
+
+    private ItemStack buildUpgradeItem(Material mat, String title, int currentLevel,
+                                       int maxLevel, int currentValue, long nextCost,
+                                       String currentInfo, String nextInfo) {
+        boolean isMax = currentLevel >= maxLevel;
+        return new ItemBuilder(mat)
+                .name(title + " &8(Niv " + currentLevel + "/" + maxLevel + ")")
+                .lore(List.of(
+                        ChatUtil.color("&7Actuel : &f" + currentInfo),
+                        ChatUtil.color(isMax ? "&aMAXIMUM ATTEINT" : "&7Prochain : &f" + nextInfo),
+                        " ",
+                        ChatUtil.color(isMax ? "&8[MAX]" : "&eCout : &f$" + nextCost),
+                        ChatUtil.color(isMax ? "" : "&aCliquez pour ameliorer !")
+                ))
+                .build();
+    }
+
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return true;
+
+        int slot = event.getRawSlot();
+        switch (slot) {
+            case 2 -> upgradeBag(player, data);
+            case 4 -> upgradeTool(player, data);
+            case 6 -> upgradeEnergy(player, data);
+        }
+
+        // Rafraichit le GUI
+        buildGui(event.getInventory(), data);
+        return true;
+    }
+
+    // ── Upgrade Logic ──────────────────────────────────────────────────
+
+    private void upgradeBag(Player player, PlayerData data) {
+        List<PluginConfig.BagUpgrade> upgrades = plugin.getPluginConfig().getBagUpgrades();
+        int nextLevel = data.getBagLevel() + 1;
+        if (nextLevel > upgrades.size()) { player.sendMessage(ChatUtil.colored("&cNiveau maximum atteint !")); return; }
+
+        PluginConfig.BagUpgrade next = upgrades.stream().filter(u -> u.level() == nextLevel).findFirst().orElse(null);
+        if (next == null) return;
+
+        if (plugin.getEconomyManager().debit(player, next.cost(), "Amelioration Sac Niv " + nextLevel)) {
+            data.setBagLevel(nextLevel);
+            player.sendMessage(ChatUtil.colored("&aSac ameliore ! Capacite : " + next.capacity() + " cartons"));
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+        }
+    }
+
+    private void upgradeTool(Player player, PlayerData data) {
+        List<PluginConfig.ToolUpgrade> upgrades = plugin.getPluginConfig().getToolUpgrades();
+        int nextLevel = data.getToolLevel() + 1;
+        if (nextLevel > upgrades.size()) { player.sendMessage(ChatUtil.colored("&cNiveau maximum atteint !")); return; }
+
+        PluginConfig.ToolUpgrade next = upgrades.stream().filter(u -> u.level() == nextLevel).findFirst().orElse(null);
+        if (next == null) return;
+
+        if (plugin.getEconomyManager().debit(player, next.cost(), "Amelioration Outil Niv " + nextLevel)) {
+            data.setToolLevel(nextLevel);
+            player.sendMessage(ChatUtil.colored("&aOutil ameliore ! Cooldown : " + next.cooldownMs() + "ms"));
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+        }
+    }
+
+    private void upgradeEnergy(Player player, PlayerData data) {
+        List<PluginConfig.EnergyUpgrade> upgrades = plugin.getPluginConfig().getEnergyUpgrades();
+        int nextLevel = data.getEnergyLevel() + 1;
+        if (nextLevel > upgrades.size()) { player.sendMessage(ChatUtil.colored("&cNiveau maximum atteint !")); return; }
+
+        PluginConfig.EnergyUpgrade next = upgrades.stream().filter(u -> u.level() == nextLevel).findFirst().orElse(null);
+        if (next == null) return;
+
+        if (plugin.getEconomyManager().debit(player, next.cost(), "Amelioration Energie Niv " + nextLevel)) {
+            data.setEnergyLevel(nextLevel);
+            // Remplit l'energie au nouveau max
+            data.setCurrentEnergy(next.maxEnergy());
+            player.sendMessage(ChatUtil.colored("&aEnergie amelioree ! Max : " + next.maxEnergy() + " | Regen : " + next.regenPerSec() + "/s"));
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+        }
+    }
+
+    // ── Helpers pour les niveaux suivants ─────────────────────────────
+
+    private long getNextBagCost(int currentLevel) {
+        return plugin.getPluginConfig().getBagUpgrades().stream()
+                .filter(u -> u.level() == currentLevel + 1)
+                .mapToLong(PluginConfig.BagUpgrade::cost).findFirst().orElse(-1);
+    }
+
+    private int getNextBagCapacity(int currentLevel) {
+        return plugin.getPluginConfig().getBagUpgrades().stream()
+                .filter(u -> u.level() == currentLevel + 1)
+                .mapToInt(PluginConfig.BagUpgrade::capacity).findFirst().orElse(-1);
+    }
+
+    private long getNextToolCost(int currentLevel) {
+        return plugin.getPluginConfig().getToolUpgrades().stream()
+                .filter(u -> u.level() == currentLevel + 1)
+                .mapToLong(PluginConfig.ToolUpgrade::cost).findFirst().orElse(-1);
+    }
+
+    private long getNextToolCooldown(int currentLevel) {
+        return plugin.getPluginConfig().getToolUpgrades().stream()
+                .filter(u -> u.level() == currentLevel + 1)
+                .mapToLong(PluginConfig.ToolUpgrade::cooldownMs).findFirst().orElse(-1);
+    }
+
+    private long getNextEnergyCost(int currentLevel) {
+        return plugin.getPluginConfig().getEnergyUpgrades().stream()
+                .filter(u -> u.level() == currentLevel + 1)
+                .mapToLong(PluginConfig.EnergyUpgrade::cost).findFirst().orElse(-1);
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+
+// Ajouter ces imports en haut du fichier
+import org.bukkit.NamespacedKey;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.inventory.meta.ItemMeta;
+import java.util.HashMap;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * GUI du Distributeur automatique.
+ * Acheter des consommables pour restaurer l'energie.
+ */
+public class VendingMachineGui {
+
+    private static final String TITLE = ChatUtil.color("&8[&bDistributeur&8] &7Recharges Energie");
+
+    private final CleanTheBackyard plugin;
+
+    public VendingMachineGui(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public void open(Player player) {
+        List<PluginConfig.VendingItem> items = plugin.getPluginConfig().getVendingItems();
+        int size = 9 * (int) Math.ceil(Math.max(1, items.size()) / 9.0 + 1);
+        Inventory inv = Bukkit.createInventory(null, Math.min(size, 27), TITLE);
+        buildGui(inv, player);
+        player.openInventory(inv);
+    }
+
+    private void buildGui(Inventory inv, Player player) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+
+        // Fond
+        ItemStack glass = new ItemBuilder(Material.CYAN_STAINED_GLASS_PANE).name(" ").build();
+        for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, glass);
+
+        List<PluginConfig.VendingItem> items = plugin.getPluginConfig().getVendingItems();
+
+        int slot = 2;
+        for (PluginConfig.VendingItem vi : items) {
+            String restoreStr = (vi.energyRestore() == -1)
+                    ? "Maximum"
+                    : "+" + vi.energyRestore();
+
+            int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(
+                    data != null ? data.getEnergyLevel() : 1
+            );
+            double currentEnergy = data != null ? data.getCurrentEnergy() : 0;
+
+            ItemStack item = new ItemBuilder(getMaterialForVending(vi.key()))
+                    .name("&b" + vi.name())
+                    .lore(List.of(
+                            ChatUtil.color("&7Energie restauree : &a" + restoreStr),
+                            ChatUtil.color("&7Votre energie : &f" + String.format("%.0f", currentEnergy) + "/" + maxEnergy),
+                            " ",
+                            ChatUtil.color("&ePrix : &f$" + vi.cost()),
+                            ChatUtil.color("&aCliquez pour acheter !")
+                    ))
+                    .build();
+            inv.setItem(slot, item);
+            slot += 2;
+        }
+
+        // Info solde
+        if (data != null) {
+            ItemStack bal = new ItemBuilder(Material.GOLD_INGOT)
+                    .name("&aSolde : &f$" + String.format("%.0f", data.getBalance()))
+                    .build();
+            inv.setItem(inv.getSize() - 5, bal);
+        }
+    }
+
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return true;
+
+        List<PluginConfig.VendingItem> items = plugin.getPluginConfig().getVendingItems();
+        int slot = event.getRawSlot();
+
+        List<Integer> itemSlots = new ArrayList<>();
+        int s = 2;
+        for (int i = 0; i < items.size(); i++) { itemSlots.add(s); s += 2; }
+
+        int idx = itemSlots.indexOf(slot);
+        if (idx < 0 || idx >= items.size()) return true;
+
+        PluginConfig.VendingItem vi = items.get(idx);
+
+        if (!plugin.getEconomyManager().debit(player, vi.cost(), vi.name())) return true;
+
+        ItemStack consumable = createConsumableItem(vi);
+
+        // Ajoute à l'inventaire, drop au sol si plein
+        HashMap<Integer, ItemStack> leftover = player.getInventory().addItem(consumable);
+        if (!leftover.isEmpty()) {
+            leftover.values().forEach(i -> player.getWorld().dropItemNaturally(player.getLocation(), i));
+            player.sendMessage(ChatUtil.colored("&eInventaire plein ! L'item est tombé à vos pieds."));
+        }
+
+        player.sendMessage(ChatUtil.colored("&aAchat réussi ! &f" + vi.name() + " &a-> ajouté à votre inventaire. Clic droit pour consommer !"));
+        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_GENERIC_EAT, 1.0f, 1.2f);
+
+        buildGui(event.getInventory(), player);
+        return true;
+    }
+
+    private ItemStack createConsumableItem(PluginConfig.VendingItem vi) {
+        String restoreStr = (vi.energyRestore() == -1) ? "Maximum" : "+" + vi.energyRestore();
+
+        ItemStack item = new ItemBuilder(getMaterialForVending(vi.key()))
+                .name("&b" + vi.name())
+                .lore(List.of(
+                        ChatUtil.color("&7Energie restaurée : &a" + restoreStr),
+                        " ",
+                        ChatUtil.color("&eClic droit pour consommer !")
+                ))
+                .build();
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            NamespacedKey key = new NamespacedKey(plugin, "energy-restore");
+            meta.getPersistentDataContainer().set(key, PersistentDataType.INTEGER, vi.energyRestore());
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    private Material getMaterialForVending(String key) {
+        return switch (key) {
+            case "soda"         -> Material.POTION;
+            case "chocolate"    -> Material.COOKIE;
+            case "energy-drink" -> Material.HONEY_BOTTLE;
+            default             -> Material.SUGAR;
+        };
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.block.Block;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.block.Action;
+
+/**
+ * Intercepte les interactions avec les blocs de cartons.
+ * Utilise PlayerInteractEvent en clic gauche pour un retour immediat
+ * et annule le BlockBreakEvent natif (la destruction est geree par BoxManager).
+ */
+public class BoxBreakListener implements Listener {
+
+    private final CleanTheBackyard plugin;
+    private final Material boxMaterial;
+
+    public BoxBreakListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        Material mat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
+        this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
+    }
+
+    /** Intercepte le clic gauche sur un carton. */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        if (event.getAction() != Action.LEFT_CLICK_BLOCK) return;
+
+        Block block = event.getClickedBlock();
+        if (block == null) return;
+
+        Player player = event.getPlayer();
+        Location loc  = block.getLocation();
+
+        // Boite OVNI (GLOWSTONE) - priorité avant la boite normale
+        if (block.getType() == Material.GLOWSTONE
+                && plugin.getEventManager().isUfoBox(loc)) {
+            event.setCancelled(true);
+            plugin.getEventManager().tryClaimUfoBox(player, loc);
+            return;
+        }
+
+        if (block.getType() != boxMaterial) return;
+
+        event.setCancelled(true);
+
+        boolean started = plugin.getBoxManager().startCollection(player, loc);
+        if (started) {
+            plugin.getSectorManager().markBroken(loc);
+        }
+    }
+
+    /** Annule le cassage natif de blocs de cartons (prevention drop items). */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBlockBreak(BlockBreakEvent event) {
+        if (event.getBlock().getType() == boxMaterial) {
+            event.setDropItems(false);
+            event.setCancelled(true);
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.NamespacedKey;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.block.Action;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
+
+public class ConsumableListener implements Listener {
+
+    private final CleanTheBackyard plugin;
+
+    public ConsumableListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) return;
+
+        Player player = event.getPlayer();
+        ItemStack item = player.getInventory().getItemInMainHand();
+        if (item.getType().isAir()) return;
+
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return;
+
+        NamespacedKey key = new NamespacedKey(plugin, "energy-restore");
+        if (!meta.getPersistentDataContainer().has(key, PersistentDataType.INTEGER)) return;
+
+        event.setCancelled(true);
+
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        int energyRestore = meta.getPersistentDataContainer().get(key, PersistentDataType.INTEGER);
+        int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel());
+
+        double restored;
+        if (energyRestore == -1) {
+            restored = maxEnergy - data.getCurrentEnergy();
+            data.setCurrentEnergy(maxEnergy);
+        } else {
+            restored = Math.min(energyRestore, maxEnergy - data.getCurrentEnergy());
+            data.addEnergy(energyRestore);
+            if (data.getCurrentEnergy() > maxEnergy) data.setCurrentEnergy(maxEnergy);
+        }
+
+        plugin.getBoxManager().removeFatigue(player, data);
+
+        // Consomme l'item
+        item.setAmount(item.getAmount() - 1);
+
+        player.sendMessage(ChatUtil.colored(
+                "&aConsommé ! &f+" + String.format("%.0f", restored) + " &aénergie restorée."
+        ));
+        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_GENERIC_EAT, 1.0f, 1.2f);
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.entity.Bat;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+
+public class GoldenDroneListener implements Listener {
+
+    private final CleanTheBackyard plugin;
+
+    public GoldenDroneListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onEntityDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Bat)) return;
+        if (!(event.getDamager() instanceof Player player)) return;
+        if (!plugin.getEventManager().isGoldenDroneSpawned()) return;
+
+        boolean claimed = plugin.getEventManager().claimGoldenDrone(player, event.getEntity().getUniqueId());
+        if (claimed) {
+            event.setCancelled(true); // On évite les dégâts normaux, le drone est supprimé dans claimGoldenDrone
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.Inventory;
+
+/**
+ * Redirige tous les clics d'inventaire vers le GuiManager.
+ */
+public class GuiListener implements Listener {
+
+    private final CleanTheBackyard plugin;
+
+    public GuiListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) return;
+        Inventory inv = event.getClickedInventory();
+        if (inv == null) return;
+
+        // Delègue au GuiManager
+        boolean handled = plugin.getGuiManager().handleClick(player, event);
+        if (handled) event.setCancelled(true);
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) return;
+        plugin.getGuiManager().onClose(player, event.getInventory());
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import net.kyori.adventure.text.Component;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerToggleSprintEvent;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public class PlayerListener implements Listener {
+
+    /** Zones interactives détectées par déplacement. */
+    private enum Zone { GARAGE, VENDING_MACHINE, DRONE_SHOP, SELL_ZONE }
+
+    private final CleanTheBackyard plugin;
+    /** Zone actuellement occupée par chaque joueur (anti-spam à l'entrée). */
+    private final Map<UUID, Zone> currentZone = new HashMap<>();
+
+    public PlayerListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        var player = event.getPlayer();
+        plugin.getServer().getScheduler().runTaskAsynchronously(plugin, () ->
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    PlayerData data = plugin.getPlayerDataManager().loadPlayer(player);
+                    int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel());
+                    if (data.getCurrentEnergy() > maxEnergy) data.setCurrentEnergy(maxEnergy);
+
+                    player.sendMessage(ChatUtil.colored(
+                            "&a&lClean The Backyard &8| &fBienvenue " + player.getName() + " !"
+                                    + "\n&7Solde : &f$" + String.format("%.0f", data.getBalance())
+                                    + " &7| Sac : &f" + data.getCurrentBoxes() + "/" +
+                                    plugin.getBoxManager().getBagCapacity(data.getBagLevel())
+                    ));
+                })
+        );
+    }
+
+    @EventHandler
+    public void onQuit(PlayerQuitEvent event) {
+        plugin.getPlayerDataManager().unloadPlayer(event.getPlayer().getUniqueId());
+        currentZone.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler
+    public void onSprint(PlayerToggleSprintEvent event) {
+        if (!event.isSprinting()) return;
+
+        var player = event.getPlayer();
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        if (data.getCurrentEnergy() < 10) {
+            player.sendActionBar(Component.text(
+                    ChatUtil.color("&cEnergie faible ! (" + String.format("%.0f", data.getCurrentEnergy()) + ")")
+            ));
+        }
+    }
+
+    @EventHandler
+    public void onMove(PlayerMoveEvent event) {
+        var player = event.getPlayer();
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        // Fatigue en sprint si énergie = 0
+        if (player.isSprinting() && data.getCurrentEnergy() <= 0) {
+            plugin.getBoxManager().applyFatigue(player, data);
+        }
+
+        // Détection uniquement quand on change de bloc (perf)
+        if (event.getTo() == null) return;
+        if (event.getFrom().getBlockX() == event.getTo().getBlockX()
+                && event.getFrom().getBlockY() == event.getTo().getBlockY()
+                && event.getFrom().getBlockZ() == event.getTo().getBlockZ()) return;
+
+        Zone newZone = detectZone(event.getTo());
+        Zone oldZone = currentZone.get(player.getUniqueId());
+
+        if (newZone == oldZone) return;
+
+        if (newZone == null) {
+            currentZone.remove(player.getUniqueId());
+            return;
+        }
+
+        // La zone de vente n'ouvre pas de GUI, donc elle ignore hasOpenGui.
+        if (newZone != Zone.SELL_ZONE && plugin.getGuiManager().hasOpenGui(player)) return;
+
+        currentZone.put(player.getUniqueId(), newZone);
+        switch (newZone) {
+            case GARAGE          -> plugin.getGuiManager().openUpgradeGui(player);
+            case VENDING_MACHINE -> plugin.getGuiManager().openVendingMachine(player);
+            case DRONE_SHOP      -> plugin.getGuiManager().openDroneShop(player);
+            case SELL_ZONE       -> plugin.getEconomyManager().sellBag(player);
+        }
+    }
+
+    /** Renvoie la zone d'interaction dans laquelle se trouve la position, ou null. */
+    private Zone detectZone(Location loc) {
+        PluginConfig cfg = plugin.getPluginConfig();
+        World world = loc.getWorld();
+        if (world == null || !world.getName().equals(cfg.getGameWorldName())) return null;
+
+        if (inRadius(loc, cfg.getGarageLocation(), cfg.getGarageRadius()))
+            return Zone.GARAGE;
+        if (inRadius(loc, cfg.getVendingMachineLocation(), cfg.getVendingMachineRadius()))
+            return Zone.VENDING_MACHINE;
+        if (inRadius(loc, cfg.getDroneShopLocation(), cfg.getDroneShopRadius()))
+            return Zone.DRONE_SHOP;
+        if (inRadius(loc, cfg.getSellZoneCenter(), cfg.getSellZoneRadius()))
+            return Zone.SELL_ZONE;
+
+        return null;
+    }
+
+    private boolean inRadius(Location player, Location target, double radius) {
+        if (target.getWorld() == null || !target.getWorld().equals(player.getWorld())) return false;
+        return player.distanceSquared(target) <= radius * radius;
+    }
+
+}
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import net.kyori.adventure.text.Component;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.entity.Player;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.scheduler.BukkitTask;
+
+import java.util.*;
+
+public class BoxManager {
+
+    private final CleanTheBackyard plugin;
+
+    private final Set<UUID> fatiguedPlayers = new HashSet<>();
+
+    // Blocs en cours de collecte (empêche le re-clic par un autre joueur)
+    private final Set<String> blocksBeingCollected = new HashSet<>();
+
+    private record CollectionState(Location location, long startTime, long durationMs, BukkitTask task) {}
+    private final Map<UUID, CollectionState> activeCollections = new HashMap<>();
+
+    public BoxManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public boolean startCollection(Player player, Location boxLocation) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return false;
+
+        double maxDist = plugin.getPluginConfig().getMaxBreakDistance();
+        if (player.getLocation().distance(boxLocation) > maxDist) {
+            player.sendMessage(ChatUtil.colored("&cVous êtes trop loin de ce carton !"));
+            return false;
+        }
+
+        // Énergie (sauf si unlimited energy active)
+        if (!data.hasUnlimitedEnergy() && data.getCurrentEnergy() <= 0) {
+            applyFatigue(player, data);
+            player.sendActionBar(Component.text(
+                    ChatUtil.color("&c[Énergie épuisée] Reposez-vous ou achetez une boisson !")
+            ));
+            return false;
+        }
+
+        int maxCapacity = getBagCapacity(data.getBagLevel());
+        if (data.getCurrentBoxes() >= maxCapacity) {
+            player.sendActionBar(Component.text(
+                    ChatUtil.color("&eSac plein ! Va vendre tes cartons dans la zone de vente.")
+            ));
+            return false;
+        }
+
+        CollectionState existing = activeCollections.get(player.getUniqueId());
+        if (existing != null) {
+            String existingKey = locKey(existing.location());
+            String newKey      = locKey(boxLocation);
+            if (existingKey.equals(newKey)) return false;
+            cancelCollection(player);
+        }
+
+        // Empêche un autre joueur de cliquer le même bloc
+        String blockKey = locKey(boxLocation);
+        if (blocksBeingCollected.contains(blockKey)) {
+            player.sendActionBar(Component.text(ChatUtil.color("&eCe carton est déjà en cours de collecte !")));
+            return false;
+        }
+        blocksBeingCollected.add(blockKey);
+
+        long durationMs = getToolCooldown(data.getToolLevel());
+        long startTime  = System.currentTimeMillis();
+
+        player.playSound(player.getLocation(), Sound.BLOCK_CHISELED_BOOKSHELF_BREAK, 0.5f, 0.8f);
+
+        BukkitTask task = plugin.getServer().getScheduler().runTaskTimer(plugin, () -> {
+            long elapsed = System.currentTimeMillis() - startTime;
+            float progress = Math.min(1.0f, (float) elapsed / durationMs);
+
+            if (boxLocation.getBlock().getType() == Material.AIR) {
+                // Bloc déjà disparu (collecté par regen ou autre)
+                blocksBeingCollected.remove(blockKey);
+                CollectionState s = activeCollections.remove(player.getUniqueId());
+                if (s != null) s.task().cancel();
+                return;
+            }
+
+            if (player.getLocation().distance(boxLocation) > maxDist + 1.0) {
+                blocksBeingCollected.remove(blockKey);
+                cancelCollection(player);
+                player.sendActionBar(Component.text(ChatUtil.color("&cCollecte annulée ! Trop loin.")));
+                return;
+            }
+
+            if (progress >= 1.0f) {
+                blocksBeingCollected.remove(blockKey);
+                CollectionState done = activeCollections.remove(player.getUniqueId());
+                if (done != null) done.task().cancel();
+                finalizeCollection(player, boxLocation, data);
+            } else {
+                player.sendActionBar(Component.text(
+                        ChatUtil.color("&b" + buildProgressBar(progress) + " &fCollecte en cours...")
+                ));
+            }
+        }, 0L, 2L);
+
+        activeCollections.put(player.getUniqueId(), new CollectionState(boxLocation, startTime, durationMs, task));
+        return true;
+    }
+
+    private void finalizeCollection(Player player, Location boxLocation, PlayerData data) {
+        if (!data.hasUnlimitedEnergy() && data.getCurrentEnergy() <= 0) {
+            applyFatigue(player, data);
+            return;
+        }
+
+        int boxesPerCollection = getBoxesPerCollection(data.getToolLevel());
+        int maxCapacity        = getBagCapacity(data.getBagLevel());
+        int toCollect          = Math.min(boxesPerCollection, maxCapacity - data.getCurrentBoxes());
+
+        if (toCollect <= 0) {
+            player.sendActionBar(Component.text(ChatUtil.color("&eSac plein !")));
+            return;
+        }
+
+        if (!data.hasUnlimitedEnergy()) {
+            data.removeEnergy(plugin.getPluginConfig().getEnergyCostPerBox() * toCollect);
+        }
+        for (int i = 0; i < toCollect; i++) {
+            data.addBox();
+            data.incrementBoxesBroken();
+        }
+
+        removeFatigue(player, data);
+
+        // Destruction IMMÉDIATE — plus de queue
+        boxLocation.getBlock().setType(Material.AIR, false);
+
+        plugin.getEventManager().onBoxBroken(boxLocation);
+
+        player.playSound(player.getLocation(), Sound.BLOCK_CHISELED_BOOKSHELF_BREAK, 1.0f, 1.2f);
+
+        String msg = toCollect > 1
+                ? ChatUtil.color("&a+" + toCollect + " cartons collectés !")
+                : ChatUtil.color("&aSac: &f" + data.getCurrentBoxes() + "/" + maxCapacity
+                + " &7| &7Énergie: &f" + String.format("%.0f", data.getCurrentEnergy()));
+        player.sendActionBar(Component.text(msg));
+    }
+
+    public void cancelCollection(Player player) {
+        CollectionState state = activeCollections.remove(player.getUniqueId());
+        if (state != null) {
+            blocksBeingCollected.remove(locKey(state.location()));
+            state.task().cancel();
+        }
+    }
+
+    public boolean isCollecting(UUID uuid) {
+        return activeCollections.containsKey(uuid);
+    }
+
+    public float getCollectionProgress(UUID uuid) {
+        CollectionState state = activeCollections.get(uuid);
+        if (state == null) return -1f;
+        long elapsed = System.currentTimeMillis() - state.startTime();
+        return Math.min(1.0f, (float) elapsed / state.durationMs());
+    }
+
+    private String buildProgressBar(float progress) {
+        int total  = 20;
+        int filled = Math.round(progress * total);
+        StringBuilder bar = new StringBuilder("&b[");
+        for (int i = 0; i < total; i++) {
+            bar.append(i < filled ? "&b█" : "&8░");
+        }
+        bar.append("&b]");
+        return bar.toString();
+    }
+
+    // Conservé pour la compatibilité SectorManager (regen flush)
+    public void flushDestructionQueue() { /* plus rien à flusher */ }
+    public void queueDestruction(Location loc) { loc.getBlock().setType(Material.AIR, false); }
+
+    public void applyFatigue(Player player, PlayerData data) {
+        UUID uuid = player.getUniqueId();
+        if (!fatiguedPlayers.contains(uuid)) {
+            fatiguedPlayers.add(uuid);
+            player.addPotionEffect(new PotionEffect(
+                    PotionEffectType.SLOWNESS, Integer.MAX_VALUE, 2, false, false, false
+            ));
+        }
+    }
+
+    public void removeFatigue(Player player, PlayerData data) {
+        UUID uuid = player.getUniqueId();
+        if (fatiguedPlayers.contains(uuid) && data.getCurrentEnergy() > 0) {
+            fatiguedPlayers.remove(uuid);
+            player.removePotionEffect(PotionEffectType.SLOWNESS);
+        }
+    }
+
+    public boolean isFatigued(UUID uuid) { return fatiguedPlayers.contains(uuid); }
+
+    public int getBagCapacity(int level) {
+        return plugin.getPluginConfig().getBagUpgrades().stream()
+                .filter(u -> u.level() == level)
+                .mapToInt(PluginConfig.BagUpgrade::capacity)
+                .findFirst().orElse(10);
+    }
+
+    public long getToolCooldown(int level) {
+        return plugin.getPluginConfig().getToolUpgrades().stream()
+                .filter(u -> u.level() == level)
+                .mapToLong(PluginConfig.ToolUpgrade::cooldownMs)
+                .findFirst().orElse(1000L);
+    }
+
+    public int getBoxesPerCollection(int level) {
+        return plugin.getPluginConfig().getToolUpgrades().stream()
+                .filter(u -> u.level() == level)
+                .mapToInt(PluginConfig.ToolUpgrade::boxesPerCollection)
+                .findFirst().orElse(1);
+    }
+
+    public int getMaxEnergyForLevel(int level) {
+        return plugin.getPluginConfig().getEnergyUpgrades().stream()
+                .filter(u -> u.level() == level)
+                .mapToInt(PluginConfig.EnergyUpgrade::maxEnergy)
+                .findFirst().orElse(100);
+    }
+
+    public double getEnergyRegenForLevel(int level) {
+        return plugin.getPluginConfig().getEnergyUpgrades().stream()
+                .filter(u -> u.level() == level)
+                .mapToDouble(PluginConfig.EnergyUpgrade::regenPerSec)
+                .findFirst().orElse(1.0);
+    }
+
+    private String locKey(Location l) {
+        return l.getBlockX() + ":" + l.getBlockY() + ":" + l.getBlockZ();
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.entity.Player;
+
+import java.util.Optional;
+
+/**
+ * Gere l'achat et la validation des drones passifs.
+ * Les gains sont appliques par DroneIncomeTask.
+ */
+public class DroneManager {
+
+    private final CleanTheBackyard plugin;
+
+    public DroneManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Tente d'acheter un drone pour un joueur.
+     */
+    public boolean purchaseDrone(Player player, String droneKey) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return false;
+
+        Optional<PluginConfig.DroneConfig> configOpt = plugin.getPluginConfig()
+                .getDroneConfigs().stream()
+                .filter(d -> d.key().equals(droneKey))
+                .findFirst();
+
+        if (configOpt.isEmpty()) {
+            player.sendMessage(ChatUtil.colored("&cDrone inconnu : " + droneKey));
+            return false;
+        }
+
+        PluginConfig.DroneConfig dc = configOpt.get();
+
+        // Verifie les pre-requis
+        if (data.getBagLevel() < dc.bagLevelRequired()) {
+            player.sendMessage(ChatUtil.colored("&cRequis : Sac Niveau " + dc.bagLevelRequired()));
+            return false;
+        }
+        if (data.getToolLevel() < dc.toolLevelRequired()) {
+            player.sendMessage(ChatUtil.colored("&cRequis : Outil Niveau " + dc.toolLevelRequired()));
+            return false;
+        }
+        if (data.getEnergyLevel() < dc.energyLevelRequired()) {
+            player.sendMessage(ChatUtil.colored("&cRequis : Energie Niveau " + dc.energyLevelRequired()));
+            return false;
+        }
+
+        // Verifie si deja possede
+        if (data.hasDrone(droneKey)) {
+            player.sendMessage(ChatUtil.colored("&eVous possedez deja ce drone !"));
+            return false;
+        }
+
+        // Debit
+        if (!plugin.getEconomyManager().debit(player, dc.cost(), dc.name())) return false;
+
+        data.addDrone(droneKey);
+        player.sendMessage(ChatUtil.colored(
+                "&aDrone &f" + dc.name() + " &aachete ! Il generera &f+$" + dc.income()
+                        + " &atoutes les " + dc.intervalSec() + "s."
+        ));
+        return true;
+    }
+
+    /**
+     * Applique les revenus passifs de tous les drones de tous les joueurs connectes.
+     * Appele par DroneIncomeTask.
+     */
+    public void applyDroneIncome() {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            PlayerData data = plugin.getPlayerDataManager().get(player);
+            if (data == null) continue;
+
+            double totalIncome = 0;
+            for (PluginConfig.DroneConfig dc : plugin.getPluginConfig().getDroneConfigs()) {
+                if (data.hasDrone(dc.key())) {
+                    totalIncome += dc.income();
+                }
+            }
+
+            if (totalIncome > 0) {
+                plugin.getEconomyManager().credit(player, totalIncome);
+            }
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.entity.Player;
+
+/**
+ * Gere toutes les transactions economiques.
+ * Point d'entree unique pour crediter / debiter un joueur.
+ */
+public class EconomyManager {
+
+    private final CleanTheBackyard plugin;
+
+    public EconomyManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    /**
+     * Credite un joueur du montant specifie (avec eventuel multiplicateur global).
+     */
+    public void credit(Player player, double amount) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        double multiplier = plugin.getPluginConfig().getGlobalSellMultiplier();
+        // Buff personnel OVNI (s'ajoute au global)
+        if (data.hasDoubleSell()) multiplier *= 2.0;
+
+        double finalAmount = amount * multiplier;
+        data.addBalance(finalAmount);
+
+        String msg = ChatUtil.color("&a+$" + String.format("%.0f", finalAmount));
+        if (multiplier > 1.0) {
+            msg += ChatUtil.color(" &e[x" + String.format("%.1f", multiplier) + " BONUS!]");
+        }
+        player.sendActionBar(net.kyori.adventure.text.Component.text(msg));
+    }
+
+    /**
+     * Debite un joueur. Retourne false si fonds insuffisants.
+     */
+    public boolean debit(Player player, double amount, String reason) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return false;
+
+        if (!data.removeBalance(amount)) {
+            player.sendMessage(ChatUtil.colored("&cFonds insuffisants ! Il vous manque $"
+                    + String.format("%.0f", amount - data.getBalance()) + " pour : " + reason));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Vend tous les cartons du sac d'un joueur.
+     */
+    public void sellBag(Player player) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+
+        int boxes = data.getCurrentBoxes();
+        if (boxes == 0) {
+            player.sendMessage(ChatUtil.colored("&eVotre sac est deja vide !"));
+            return;
+        }
+
+        double pricePerBox = plugin.getPluginConfig().getBoxSellPrice();
+        double total       = boxes * pricePerBox;
+
+        data.clearBag();
+        credit(player, total);
+
+        player.sendMessage(ChatUtil.colored(
+                "&aVente reussie ! &f" + boxes + " cartons &a-> &f$"
+                        + String.format("%.0f", total * plugin.getPluginConfig().getGlobalSellMultiplier())
+        ));
+        player.playSound(player.getLocation(),
+                org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
+    }
+
+    public double getBalance(Player player) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        return data != null ? data.getBalance() : 0;
+    }
+}
+
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.title.Title;
+import org.bukkit.*;
+import org.bukkit.entity.*;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.Vector;
+
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class EventManager {
+
+    private final CleanTheBackyard plugin;
+    private final Random random = new Random();
+
+    // ── OVNI ──────────────────────────────────────────────────────────
+    private boolean ufoEventActive      = false;
+    private boolean ufoMultiplierActive = false;
+    private final AtomicInteger ufoBoxCount = new AtomicInteger(0);
+    private int ufoQuota = 0;
+
+    // Boites spéciales OVNI : location -> type de récompense
+    public enum UfoBoxReward { BONUS_MONEY, DOUBLE_SELL, UNLIMITED_ENERGY }
+    private final Map<String, UfoBoxReward> ufoBoxes = new HashMap<>();
+    private final List<Location> ufoBoxLocations = new ArrayList<>();
+
+    // ── Drone Doré ────────────────────────────────────────────────────
+    private UUID     goldenDroneEntityUUID = null;
+    private int      goldenDroneReward     = 0;
+    private BukkitTask goldenDroneTask     = null;
+
+    public EventManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    // ── PLANIFICATION ─────────────────────────────────────────────────
+
+    public void scheduleNextUfoEvent() {
+        PluginConfig cfg = plugin.getPluginConfig();
+        int delaySeconds = cfg.getUfoMin() + random.nextInt(cfg.getUfoMax() - cfg.getUfoMin());
+        Bukkit.getScheduler().runTaskLater(plugin, this::startUfoEvent, delaySeconds * 20L);
+        plugin.getLogger().info("[CTB] Prochain événement OVNI dans " + delaySeconds + "s.");
+    }
+
+    public void scheduleNextGoldenDrone() {
+        PluginConfig cfg = plugin.getPluginConfig();
+        int delaySeconds = cfg.getGoldenDroneMin()
+                + random.nextInt(cfg.getGoldenDroneMax() - cfg.getGoldenDroneMin());
+        Bukkit.getScheduler().runTaskLater(plugin, this::spawnGoldenDrone, delaySeconds * 20L);
+        plugin.getLogger().info("[CTB] Prochain Drone Doré dans " + delaySeconds + "s.");
+    }
+
+    // ── OVNI ──────────────────────────────────────────────────────────
+
+    private void startUfoEvent() {
+        ufoEventActive = true;
+        ufoBoxCount.set(0);
+        ufoQuota = plugin.getPluginConfig().getUfoEventQuota();
+
+        spawnUfoBoxes();
+
+        String msg = ChatUtil.color("&5[ALERTE] &dUn OVNI survole le jardin ! "
+                + "Des &fcaisses mystérieuses &dont atterri ! "
+                + "Détruisez &f" + ufoQuota + " &dcartons en équipe pour activer le &fx2 &dde vente !");
+
+        Title title = Title.title(
+                Component.text(ChatUtil.color("&5ALERTE OVNI !")),
+                Component.text(ChatUtil.color("&dDes caisses spéciales sont apparues !")),
+                Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(5), Duration.ofMillis(1000))
+        );
+
+        for (var player : Bukkit.getOnlinePlayers()) {
+            player.sendMessage(msg);
+            player.showTitle(title);
+            player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.5f);
+        }
+
+        // Fin automatique après 10 minutes
+        new BukkitRunnable() {
+            @Override public void run() {
+                if (ufoEventActive) endUfoEvent(false);
+            }
+        }.runTaskLater(plugin, 20L * 600);
+    }
+
+    private void spawnUfoBoxes() {
+        ufoBoxes.clear();
+        ufoBoxLocations.clear();
+
+        World world = plugin.getPluginConfig().getGameWorld();
+        if (world == null || world.getPlayers().isEmpty()) return;
+
+        // Spawn 5 caisses spéciales autour de joueurs aléatoires
+        List<Player> players = new ArrayList<>(world.getPlayers());
+        UfoBoxReward[] rewards = UfoBoxReward.values();
+
+        for (int i = 0; i < 5; i++) {
+            Player target = players.get(random.nextInt(players.size()));
+            Location base = target.getLocation();
+
+            // Offset aléatoire dans un rayon de 8-15 blocs, même Y
+            double angle = random.nextDouble() * Math.PI * 2;
+            double dist  = 8 + random.nextInt(8);
+            Location spawnLoc = base.clone().add(
+                    Math.cos(angle) * dist,
+                    0,
+                    Math.sin(angle) * dist
+            );
+            spawnLoc.setY(spawnLoc.getWorld().getHighestBlockYAt(spawnLoc));
+
+            // Évite de placer sur un bloc NOTE_BLOCK existant
+            if (spawnLoc.getBlock().getType() != Material.AIR) {
+                spawnLoc.add(0, 1, 0);
+            }
+
+            UfoBoxReward reward = rewards[random.nextInt(rewards.length)];
+            spawnLoc.getBlock().setType(Material.GLOWSTONE, false);
+
+            String key = locKey(spawnLoc);
+            ufoBoxes.put(key, reward);
+            ufoBoxLocations.add(spawnLoc.clone());
+        }
+
+        Bukkit.getOnlinePlayers().forEach(p ->
+                p.sendMessage(ChatUtil.colored("&d[OVNI] &fDes caisses &6mystérieuses &fbrillantes ont atterri dans le jardin !"))
+        );
+    }
+
+    /**
+     * Appelé quand un joueur collecte une caisse OVNI spéciale.
+     * @return true si c'était bien une caisse OVNI
+     */
+    public boolean tryClaimUfoBox(Player player, Location loc) {
+        String key = locKey(loc);
+        UfoBoxReward reward = ufoBoxes.remove(key);
+        if (reward == null) return false;
+
+        ufoBoxLocations.removeIf(l -> locKey(l).equals(key));
+        loc.getBlock().setType(Material.AIR, false);
+
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return true;
+
+        switch (reward) {
+            case BONUS_MONEY -> {
+                int bonus = 500 + random.nextInt(1500); // 500-2000$
+                plugin.getEconomyManager().credit(player, bonus);
+                player.sendMessage(ChatUtil.colored(
+                        "&6[OVNI] &fCaisse mystérieuse ! Vous avez trouvé &a+$" + bonus + " &fdedans !"
+                ));
+                Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+                        p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a trouvé de l'argent dans une caisse OVNI !"))
+                );
+            }
+            case DOUBLE_SELL -> {
+                data.setDoubleSell(180); // 3 minutes
+                player.sendMessage(ChatUtil.colored(
+                        "&6[OVNI] &fCaisse mystérieuse ! &ex2 VENTE &fpersonnel pendant &f3 minutes &f!"
+                ));
+                Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+                        p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a obtenu un &ex2 vente personnel &fpendant 3 min !"))
+                );
+            }
+            case UNLIMITED_ENERGY -> {
+                data.setUnlimitedEnergy(300); // 5 minutes
+                plugin.getBoxManager().removeFatigue(player, data);
+                player.sendMessage(ChatUtil.colored(
+                        "&6[OVNI] &fCaisse mystérieuse ! &bÉNERGIE ILLIMITÉE &fpendant &f5 minutes &f!"
+                ));
+                Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+                        p.sendMessage(ChatUtil.colored("&6[OVNI] &f" + player.getName() + " a obtenu de l'&bénergie illimitée &fpendant 5 min !"))
+                );
+            }
+        }
+        return true;
+    }
+
+    public boolean isUfoBox(Location loc) {
+        return ufoBoxes.containsKey(locKey(loc));
+    }
+
+    public void onBoxBroken(Location loc) {
+        if (!ufoEventActive) return;
+
+        int count = ufoBoxCount.incrementAndGet();
+        if (count % 50 == 0) {
+            Bukkit.getOnlinePlayers().forEach(p ->
+                    p.sendMessage(ChatUtil.colored("&d[OVNI] &f" + count + " / " + ufoQuota + " cartons détruits !"))
+            );
+        }
+        if (count >= ufoQuota) endUfoEvent(true);
+    }
+
+    private void endUfoEvent(boolean success) {
+        ufoEventActive = false;
+        // Nettoie les boites OVNI restantes
+        ufoBoxLocations.forEach(l -> {
+            if (l.getBlock().getType() == Material.GLOWSTONE) l.getBlock().setType(Material.AIR, false);
+        });
+        ufoBoxes.clear();
+        ufoBoxLocations.clear();
+
+        if (success) {
+            activateSellMultiplier();
+        } else {
+            Bukkit.getOnlinePlayers().forEach(p ->
+                    p.sendMessage(ChatUtil.colored("&c[OVNI] Objectif non atteint ! "
+                            + ufoBoxCount.get() + "/" + ufoQuota + " cartons."))
+            );
+        }
+        scheduleNextUfoEvent();
+    }
+
+    private void activateSellMultiplier() {
+        ufoMultiplierActive = true;
+        plugin.getPluginConfig().setGlobalSellMultiplier(2.0);
+
+        Bukkit.getOnlinePlayers().forEach(p -> {
+            p.sendMessage(ChatUtil.colored("&6[SUCCÈS] &ex2 bonus de vente global pendant "
+                    + plugin.getPluginConfig().getUfoMultiplierDuration() + "s !"));
+            p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.0f);
+        });
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            plugin.getPluginConfig().setGlobalSellMultiplier(1.0);
+            ufoMultiplierActive = false;
+            Bukkit.getOnlinePlayers().forEach(p ->
+                    p.sendMessage(ChatUtil.colored("&7[Bonus] Le multiplicateur x2 global est expiré."))
+            );
+        }, plugin.getPluginConfig().getUfoMultiplierDuration() * 20L);
+    }
+
+    // ── DRONE DORÉ ────────────────────────────────────────────────────
+
+    public void spawnGoldenDrone() {
+        if (goldenDroneEntityUUID != null) return; // déjà actif
+
+        Collection<? extends Player> online = Bukkit.getOnlinePlayers();
+        if (online.isEmpty()) {
+            scheduleNextGoldenDrone();
+            return;
+        }
+
+        // Cible un joueur aléatoire
+        Player target = online.stream()
+                .skip(random.nextInt(online.size()))
+                .findFirst().orElse(null);
+        if (target == null) { scheduleNextGoldenDrone(); return; }
+
+        PluginConfig cfg = plugin.getPluginConfig();
+        goldenDroneReward = cfg.getGoldenDroneRewardMin()
+                + random.nextInt(cfg.getGoldenDroneRewardMax() - cfg.getGoldenDroneRewardMin());
+
+        // Spawn à 4-6 blocs au-dessus du joueur, légèrement décalé
+        Location spawnLoc = target.getLocation().clone().add(
+                (random.nextDouble() - 0.5) * 6,
+                4 + random.nextInt(3), // hauteur 4-6 : frappable depuis le sol
+                (random.nextDouble() - 0.5) * 6
+        );
+
+        Bat drone = (Bat) spawnLoc.getWorld().spawnEntity(spawnLoc, EntityType.BAT);
+        drone.setCustomName(ChatUtil.color("&6✦ Drone Doré [$" + goldenDroneReward + "] ✦"));
+        drone.setCustomNameVisible(true);
+        drone.setRemoveWhenFarAway(false);
+        drone.setAware(false); // NoAI pour contrôle manuel
+
+        // Vitesse linéaire aléatoire
+        double angle = random.nextDouble() * Math.PI * 2;
+        double speed = 0.12;
+        drone.setVelocity(new Vector(Math.cos(angle) * speed, 0, Math.sin(angle) * speed));
+
+        goldenDroneEntityUUID = drone.getUniqueId();
+
+        String msg = ChatUtil.color("&6[DRONE DORÉ] &eUn Drone Doré est apparu près de &f"
+                + target.getName() + " &e! Frappez-le en moins de &f30s &epour gagner &f$" + goldenDroneReward + " &e!");
+        Bukkit.getOnlinePlayers().forEach(p -> {
+            p.sendMessage(msg);
+            p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL, 1.0f, 1.5f);
+        });
+
+        // Mouvement continu + timer 30s
+        final UUID droneUUID = goldenDroneEntityUUID;
+        goldenDroneTask = new BukkitRunnable() {
+            int ticks = 0;
+            @Override
+            public void run() {
+                ticks += 4; // appelé toutes les 4 ticks
+                Entity entity = Bukkit.getEntity(droneUUID);
+
+                if (entity == null || !entity.isValid()) {
+                    expireGoldenDrone(false);
+                    cancel();
+                    return;
+                }
+
+                if (ticks >= 600) { // 30 secondes (600 ticks)
+                    expireGoldenDrone(true);
+                    entity.remove();
+                    cancel();
+                    return;
+                }
+
+                // Maintient la vitesse linéaire (les entités ralentissent avec la friction)
+                Vector vel = entity.getVelocity();
+                double hSpeed = Math.sqrt(vel.getX() * vel.getX() + vel.getZ() * vel.getZ());
+                if (hSpeed < 0.08) {
+                    double norm = speed / Math.max(hSpeed, 0.01);
+                    entity.setVelocity(new Vector(vel.getX() * norm, 0, vel.getZ() * norm));
+                }
+            }
+        }.runTaskTimer(plugin, 4L, 4L);
+    }
+
+    private void expireGoldenDrone(boolean timeout) {
+        goldenDroneEntityUUID = null;
+        goldenDroneReward     = 0;
+        if (goldenDroneTask != null) { goldenDroneTask.cancel(); goldenDroneTask = null; }
+
+        if (timeout) {
+            Bukkit.getOnlinePlayers().forEach(p ->
+                    p.sendMessage(ChatUtil.colored("&7[Drone Doré] Personne n'a attrapé le drone à temps..."))
+            );
+        }
+        scheduleNextGoldenDrone();
+    }
+
+    /**
+     * Appelé par GoldenDroneListener quand le drone est frappé.
+     */
+    public boolean claimGoldenDrone(Player player, UUID entityUUID) {
+        if (goldenDroneEntityUUID == null || !goldenDroneEntityUUID.equals(entityUUID)) return false;
+
+        int reward = goldenDroneReward;
+        goldenDroneEntityUUID = null;
+        goldenDroneReward     = 0;
+        if (goldenDroneTask != null) { goldenDroneTask.cancel(); goldenDroneTask = null; }
+
+        Entity drone = Bukkit.getEntity(entityUUID);
+        if (drone != null) drone.remove();
+
+        plugin.getEconomyManager().credit(player, reward);
+        player.sendMessage(ChatUtil.colored("&6✦ Vous avez abattu le Drone Doré ! +$" + reward + " ✦"));
+        Bukkit.getOnlinePlayers().stream().filter(p -> !p.equals(player)).forEach(p ->
+                p.sendMessage(ChatUtil.colored("&6[Drone Doré] &f" + player.getName()
+                        + " &6a remporté &f$" + reward + " &6en abattant le Drone Doré !"))
+        );
+
+        scheduleNextGoldenDrone();
+        return true;
+    }
+
+    // ── Getters ───────────────────────────────────────────────────────
+
+    public boolean isUfoEventActive()      { return ufoEventActive; }
+    public boolean isUfoMultiplierActive() { return ufoMultiplierActive; }
+    public boolean isGoldenDroneSpawned()  { return goldenDroneEntityUUID != null; }
+    public int     getUfoBoxCount()        { return ufoBoxCount.get(); }
+    public int     getUfoQuota()           { return ufoQuota; }
+
+    private String locKey(Location l) {
+        return l.getBlockX() + ":" + l.getBlockY() + ":" + l.getBlockZ();
+    }
+
+    // Dans EventManager.java — rendre startUfoEvent accessible depuis l'admin
+    public void forceStartUfoEvent() {
+        startUfoEvent();
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+
+/**
+ * Charge, met en cache et sauvegarde les profils joueurs en YAML.
+ * Chaque joueur = un fichier /plugins/CleanTheBackyard/players/<uuid>.yml
+ */
+public class PlayerDataManager {
+
+    private final CleanTheBackyard plugin;
+    private final File playersFolder;
+    private final Map<UUID, PlayerData> cache = new HashMap<>();
+
+    public PlayerDataManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        this.playersFolder = new File(plugin.getDataFolder(), "players");
+        if (!playersFolder.exists()) playersFolder.mkdirs();
+    }
+
+    // ── Load / Save ───────────────────────────────────────────────────
+
+    /** Charge ou cree le profil d'un joueur et le met en cache. */
+    public PlayerData loadPlayer(Player player) {
+        UUID uuid = player.getUniqueId();
+        if (cache.containsKey(uuid)) return cache.get(uuid);
+
+        File file = getFile(uuid);
+        PlayerData data;
+
+        if (file.exists()) {
+            YamlConfiguration yml = YamlConfiguration.loadConfiguration(file);
+            data = deserialize(uuid, player.getName(), yml);
+        } else {
+            data = new PlayerData(uuid, player.getName());
+        }
+
+        cache.put(uuid, data);
+        return data;
+    }
+
+    /** Sauvegarde le profil d'un joueur et le retire du cache. */
+    public void unloadPlayer(UUID uuid) {
+        PlayerData data = cache.remove(uuid);
+        if (data != null) saveData(data);
+    }
+
+    /** Sauvegarde tous les profils en cache (appele a l'onDisable). */
+    public void saveAll() {
+        cache.values().forEach(this::saveData);
+        plugin.getLogger().info("[CTB] " + cache.size() + " profil(s) sauvegarde(s).");
+    }
+
+    // ── Cache Access ──────────────────────────────────────────────────
+
+    public PlayerData get(UUID uuid) { return cache.get(uuid); }
+    public PlayerData get(Player p)  { return cache.get(p.getUniqueId()); }
+    public boolean isLoaded(UUID uuid){ return cache.containsKey(uuid); }
+    public Collection<PlayerData> getAll(){ return cache.values(); }
+
+    // ── YAML Serialization ────────────────────────────────────────────
+
+    private void saveData(PlayerData data) {
+        File file = getFile(data.getUuid());
+        YamlConfiguration yml = new YamlConfiguration();
+
+        yml.set("name",                data.getName());
+        yml.set("balance",             data.getBalance());
+        yml.set("total-earned",        data.getTotalEarned());
+        yml.set("total-boxes-broken",  data.getTotalBoxesBroken());
+        yml.set("bag-level",           data.getBagLevel());
+        yml.set("current-boxes",       data.getCurrentBoxes());
+        yml.set("tool-level",          data.getToolLevel());
+        yml.set("energy-level",        data.getEnergyLevel());
+        yml.set("current-energy",      data.getCurrentEnergy());
+        yml.set("owned-drones",        new ArrayList<>(data.getOwnedDrones()));
+
+        try {
+            yml.save(file);
+        } catch (IOException e) {
+            plugin.getLogger().severe("[CTB] Erreur de sauvegarde pour " + data.getName() + ": " + e.getMessage());
+        }
+    }
+
+    private PlayerData deserialize(UUID uuid, String name, YamlConfiguration yml) {
+        PlayerData d = new PlayerData(uuid, name);
+        d.setBalance(yml.getDouble("balance", 0));
+        d.setBagLevel(yml.getInt("bag-level", 1));
+        d.setCurrentBoxes(yml.getInt("current-boxes", 0));
+        d.setToolLevel(yml.getInt("tool-level", 1));
+        d.setEnergyLevel(yml.getInt("energy-level", 1));
+        d.setCurrentEnergy(yml.getDouble("current-energy", 100));
+
+        List<?> drones = yml.getList("owned-drones", new ArrayList<>());
+        for (Object o : drones) {
+            if (o instanceof String s) d.addDrone(s);
+        }
+        return d;
+    }
+
+    private File getFile(UUID uuid) {
+        return new File(playersFolder, uuid.toString() + ".yml");
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+
+import java.util.*;
+
+/**
+ * Decoupage du jardin en secteurs de 16x16 blocs.
+ * Un secteur se regenere uniquement lorsqu'il est vide
+ * et qu'aucun joueur n'est a proximite.
+ */
+public class SectorManager {
+
+    private static final int SECTOR_SIZE = 16;
+
+    private final CleanTheBackyard plugin;
+
+    // Cle = "x_z" du coin NW du secteur
+    private final Map<String, Sector> sectors = new HashMap<>();
+
+    public SectorManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    // ── API Publique ──────────────────────────────────────────────────
+
+    /**
+     * Enregistre un secteur avec la liste de ses emplacements de cartons.
+     */
+    public void registerSector(int sectorX, int sectorZ, List<Location> boxLocations) {
+        String key = sectorKey(sectorX, sectorZ);
+        sectors.put(key, new Sector(sectorX, sectorZ, new ArrayList<>(boxLocations)));
+    }
+
+    /**
+     * Marque un emplacement comme vide (carton brise).
+     */
+    public void markBroken(Location loc) {
+        String key = getSectorKeyFor(loc);
+        Sector sector = sectors.get(key);
+        if (sector != null) sector.markBroken(loc);
+    }
+
+    /**
+     * Tente de regenerer les secteurs eligibles.
+     * Appele par SectorRegenTask toutes les 4 secondes.
+     */
+    public void tickRegen() {
+        World world = plugin.getPluginConfig().getGameWorld();
+        if (world == null) return;
+
+        for (Sector sector : sectors.values()) {
+            if (!sector.isEmpty()) continue;
+
+            // Verifie qu'aucun joueur n'est proche
+            Location center = sector.getCenterLocation(world);
+            boolean playerNearby = world.getPlayers().stream()
+                    .anyMatch(p -> p.getLocation().distanceSquared(center) < (SECTOR_SIZE * SECTOR_SIZE));
+
+            if (!playerNearby) {
+                regenerateSector(sector, world);
+            }
+        }
+
+        // Vide la queue de destruction
+        plugin.getBoxManager().flushDestructionQueue();
+    }
+
+    // ── Regen Interne ─────────────────────────────────────────────────
+
+    private void regenerateSector(Sector sector, World world) {
+        Material boxMaterial = Material.matchMaterial(
+                plugin.getPluginConfig().getBoxBlock()
+        );
+        if (boxMaterial == null) boxMaterial = Material.NOTE_BLOCK;
+
+        for (Location loc : sector.getBoxLocations()) {
+            Location realLoc = loc.clone();
+            realLoc.setWorld(world);
+            if (realLoc.getBlock().getType() == Material.AIR) {
+                realLoc.getBlock().setType(boxMaterial, false);
+            }
+        }
+        sector.resetBroken();
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    private String getSectorKeyFor(Location loc) {
+        int sx = Math.floorDiv(loc.getBlockX(), SECTOR_SIZE) * SECTOR_SIZE;
+        int sz = Math.floorDiv(loc.getBlockZ(), SECTOR_SIZE) * SECTOR_SIZE;
+        return sectorKey(sx, sz);
+    }
+
+    private String sectorKey(int x, int z) { return x + "_" + z; }
+
+    public int getSectorCount()  { return sectors.size(); }
+    public Map<String, Sector> getSectors(){ return sectors; }
+
+    // ── Classe interne Secteur ────────────────────────────────────────
+
+    public static class Sector {
+        private final int x, z;
+        private final List<Location> boxLocations;
+        private final Set<String>    brokenLocations = new HashSet<>();
+
+        public Sector(int x, int z, List<Location> boxLocations) {
+            this.x = x;
+            this.z = z;
+            this.boxLocations = boxLocations;
+        }
+
+        public void markBroken(Location loc) {
+            brokenLocations.add(locKey(loc));
+        }
+
+        public boolean isEmpty() {
+            return brokenLocations.size() >= boxLocations.size();
+        }
+
+        public void resetBroken() { brokenLocations.clear(); }
+
+        public List<Location> getBoxLocations() { return boxLocations; }
+
+        public Location getCenterLocation(World world) {
+            return new Location(world,
+                    x + (SECTOR_SIZE / 2.0),
+                    64,
+                    z + (SECTOR_SIZE / 2.0));
+        }
+
+        private String locKey(Location l) {
+            return l.getBlockX() + ":" + l.getBlockY() + ":" + l.getBlockZ();
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.task;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.manager.DroneManager;
+import org.bukkit.scheduler.BukkitRunnable;
+
+/**
+ * Tâche responsable de l'application des revenus passifs des drones.
+ */
+public class DroneIncomeTask extends BukkitRunnable {
+
+    private final CleanTheBackyard plugin;
+    private final DroneManager droneManager;
+
+    public DroneIncomeTask(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        this.droneManager = plugin.getDroneManager();
+    }
+
+    @Override
+    public void run() {
+        droneManager.applyDroneIncome(); // Applique les revenus de tous les drones
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.task;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+
+/**
+ * Tâche responsable de la régénération d'énergie des joueurs.
+ */
+public class EnergyRegenTask extends BukkitRunnable {
+
+    private final CleanTheBackyard plugin;
+
+    public EnergyRegenTask(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @Override
+    public void run() {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            PlayerData data = plugin.getPlayerDataManager().get(player);
+            if (data == null) continue;
+
+            // Régénération d'énergie
+            double regen = plugin.getBoxManager().getEnergyRegenForLevel(data.getEnergyLevel());
+            data.addEnergy(regen);
+
+            // Si l'énergie dépasse le maximum, la remettre au maximum
+            int maxEnergy = plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel());
+            if (data.getCurrentEnergy() > maxEnergy) {
+                data.setCurrentEnergy(maxEnergy);
+            }
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.task;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+
+/**
+ * Tâche responsable de l'affichage des informations du joueur en temps réel dans la barre d'action.
+ */
+public class HudTask extends BukkitRunnable {
+
+    private final CleanTheBackyard plugin;
+
+    public HudTask(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @Override
+    public void run() {
+        for (Player player : plugin.getServer().getOnlinePlayers()) {
+            PlayerData data = plugin.getPlayerDataManager().get(player);
+            if (data == null) continue;
+
+            // Si une collecte est active, la barre de BoxManager prend le relais
+            if (plugin.getBoxManager().isCollecting(player.getUniqueId())) continue;
+
+            String actionBar = String.format("&aSolde: &f$%.0f &7| &fSac: &f%d/%d &7| &7Énergie: &f%.0f/%.0f",
+                    data.getBalance(),
+                    data.getCurrentBoxes(),
+                    plugin.getBoxManager().getBagCapacity(data.getBagLevel()),
+                    data.getCurrentEnergy(),
+                    (double) plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel())
+            );
+
+            player.sendActionBar(net.kyori.adventure.text.Component.text(ChatUtil.color(actionBar)));
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.task;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.scheduler.BukkitRunnable;
+
+/**
+ * Tâche responsable de la régénération des secteurs du jardin.
+ */
+public class SectorRegenTask extends BukkitRunnable {
+
+    private final CleanTheBackyard plugin;
+
+    public SectorRegenTask(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    @Override
+    public void run() {
+        plugin.getSectorManager().tickRegen(); // Vérifie et régénère les secteurs
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.util;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.TextColor;
+
+/**
+ * Utilitaire pour la gestion des messages de chat.
+ */
+public class ChatUtil {
+
+    private static final String PREFIX = "&8[&aClean The Backyard&8] ";
+
+    public static String color(String message) {
+        return net.md_5.bungee.api.ChatColor.translateAlternateColorCodes('&', message);
+    }
+
+    public static Component colored(String message) {
+        return Component.text(color(message));
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.util;
+
+import org.bukkit.Material;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+
+import java.util.List;
+
+public class ItemBuilder {
+
+    private final ItemStack item;
+
+    public ItemBuilder(Material material) {
+        this.item = new ItemStack(material);
+    }
+
+    public ItemBuilder name(String name) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.displayName(ChatUtil.colored(name));
+            item.setItemMeta(meta);
+        }
+        return this;
+    }
+
+    public ItemBuilder lore(List<String> lore) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.lore(lore.stream().map(ChatUtil::colored).toList());
+            item.setItemMeta(meta);
+        }
+        return this;
+    }
+
+    public ItemStack build() {
+        return item;
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard;
+
+import fr.cleanthebackyard.cleanTheBackyard.command.AdminCommand;
+//import fr.cleanthebackyard.cleanTheBackyard.command.StatsCommand;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.gui.GuiManager;
+import fr.cleanthebackyard.cleanTheBackyard.listener.*;
+import fr.cleanthebackyard.cleanTheBackyard.manager.*;
+import fr.cleanthebackyard.cleanTheBackyard.task.*;
+import org.bukkit.plugin.java.JavaPlugin;
+
+public final class CleanTheBackyard extends JavaPlugin {
+
+    private static CleanTheBackyard instance;
+
+    // Managers
+    private PluginConfig       pluginConfig;
+    private PlayerDataManager  playerDataManager;
+    private EconomyManager     economyManager;
+    private BoxManager         boxManager;
+    private SectorManager      sectorManager;
+    private DroneManager       droneManager;
+    private EventManager       eventManager;
+    private GuiManager         guiManager;
+
+    // Tasks (handles)
+    private HudTask            hudTask;
+    private EnergyRegenTask    energyRegenTask;
+    private DroneIncomeTask    droneIncomeTask;
+    private SectorRegenTask    sectorRegenTask;
+
+    @Override
+    public void onEnable() {
+        instance = this;
+
+        // ── Config ──────────────────────────────────────────────────
+        saveDefaultConfig();
+        pluginConfig = new PluginConfig(this);
+
+        // ── Managers ────────────────────────────────────────────────
+        playerDataManager = new PlayerDataManager(this);
+        economyManager    = new EconomyManager(this);
+        boxManager        = new BoxManager(this);
+        sectorManager     = new SectorManager(this);
+        droneManager      = new DroneManager(this);
+        eventManager      = new EventManager(this);
+        guiManager        = new GuiManager(this);
+
+        // ── Listeners ───────────────────────────────────────────────
+        getServer().getPluginManager().registerEvents(new PlayerListener(this),   this);
+        getServer().getPluginManager().registerEvents(new BoxBreakListener(this), this);
+        getServer().getPluginManager().registerEvents(new GuiListener(this),      this);
+        getServer().getPluginManager().registerEvents(new ConsumableListener(this), this);
+        getServer().getPluginManager().registerEvents(new GoldenDroneListener(this), this);
+
+        // ── Commands ────────────────────────────────────────────────
+        // Remplacer la ligne existante
+        var ctbCmd = getCommand("ctb");
+        AdminCommand adminCommand = new AdminCommand(this);
+        ctbCmd.setExecutor(adminCommand);
+        ctbCmd.setTabCompleter(adminCommand);  // ← ajout
+
+        // ── Tasks ───────────────────────────────────────────────────
+        hudTask         = new HudTask(this);
+        energyRegenTask = new EnergyRegenTask(this);
+        droneIncomeTask = new DroneIncomeTask(this);
+        sectorRegenTask = new SectorRegenTask(this);
+
+        hudTask.runTaskTimer(this, 0L, 4L);            // 4 ticks = ~200ms
+        energyRegenTask.runTaskTimer(this, 20L, 20L);  // toutes les secondes
+        droneIncomeTask.runTaskTimer(this, 20L, 200L); // toutes les 10s
+        sectorRegenTask.runTaskTimer(this, 40L, 80L);  // toutes les 4s
+        eventManager.scheduleNextUfoEvent();
+        eventManager.scheduleNextGoldenDrone(); // remplace le GoldenDroneTask
+
+        getLogger().info("[CleanTheBackyard] Plugin charge avec succes !");
+    }
+
+    @Override
+    public void onDisable() {
+        // Sauvegarde tous les profils en memoire
+        if (playerDataManager != null) {
+            playerDataManager.saveAll();
+        }
+        getLogger().info("[CleanTheBackyard] Plugin decharge. Donnees sauvegardees.");
+    }
+
+    // ── Getters ─────────────────────────────────────────────────────
+
+    public static CleanTheBackyard getInstance() { return instance; }
+    public PluginConfig      getPluginConfig()    { return pluginConfig; }
+    public PlayerDataManager getPlayerDataManager(){ return playerDataManager; }
+    public EconomyManager    getEconomyManager()  { return economyManager; }
+    public BoxManager        getBoxManager()      { return boxManager; }
+    public SectorManager     getSectorManager()   { return sectorManager; }
+    public DroneManager      getDroneManager()    { return droneManager; }
+    public EventManager      getEventManager()    { return eventManager; }
+    public GuiManager        getGuiManager()      { return guiManager; }
+}
+# =============================================
+#   CleanTheBackyard - Configuration Principale
+# =============================================
+
+game-world: "world"
+
+# Coordonnees de la zone de vente
+sell-zone:
+  x: 81
+  y: 118
+  z: -25
+  radius: 3
+
+# Garage d'ameliorations
+garage:
+  x: 73
+  y: 118
+  z: -20
+  radius: 2.5
+
+# Distributeur automatique
+vending-machine:
+  x: 72
+  y: 117
+  z: -31
+  radius: 2.5
+
+# Boutique de drones (NOUVEAU)
+drone-shop:
+  x: 68
+  y: 117
+  z: -15
+  radius: 2.5
+
+box-sell-price: 50 #à REMETTRE à 5 !!!!!!!---------------------------------------------------------------------------------
+global-sell-multiplier: 1.0
+ufo-multiplier-duration: 120
+ufo-event-quota: 500
+golden-drone-min: 180
+golden-drone-max: 480
+ufo-min: 900
+ufo-max: 1800
+golden-drone-reward-min: 500
+golden-drone-reward-max: 2000
+box-block: "NOTE_BLOCK"
+max-break-distance: 5.0
+
+# Cout en energie par carton casse (NOUVEAU)
+# Combine a la regen reduite, force l'usage du distributeur.
+energy-cost-per-box: 10.0 #à REMETTRE à 3 !!!!!!!---------------------------------------------------------------------------------
+
+# =============================================
+#   Tables de Progression
+# =============================================
+
+bag-upgrades:
+  - { level: 1, capacity: 10,   cost: 0 }
+  - { level: 2, capacity: 25,   cost: 100 }
+  - { level: 3, capacity: 50,   cost: 300 }
+  - { level: 4, capacity: 100,  cost: 800 }
+  - { level: 5, capacity: 200,  cost: 2000 }
+  - { level: 6, capacity: 400,  cost: 5000 }
+  - { level: 7, capacity: 750,  cost: 12000 }
+  - { level: 8, capacity: 1500, cost: 30000 }
+
+tool-upgrades:
+  - { level: 1, cooldown-ms: 1000, boxes-per-collection: 1, cost: 0 }
+  - { level: 2, cooldown-ms: 750,  boxes-per-collection: 1, cost: 150 }
+  - { level: 3, cooldown-ms: 500,  boxes-per-collection: 1, cost: 500 }
+  - { level: 4, cooldown-ms: 350,  boxes-per-collection: 1, cost: 1500 }
+  - { level: 5, cooldown-ms: 250,  boxes-per-collection: 2, cost: 4000 }
+  - { level: 6, cooldown-ms: 150,  boxes-per-collection: 2, cost: 10000 }
+  - { level: 7, cooldown-ms: 100,  boxes-per-collection: 3, cost: 25000 }
+  - { level: 8, cooldown-ms: 50,   boxes-per-collection: 4, cost: 60000 }
+
+# Regen REDUITE pour rendre le distributeur necessaire
+energy-upgrades:
+  - { level: 1, max-energy: 100, regen-per-sec: 0.5, cost: 0 }
+  - { level: 2, max-energy: 150, regen-per-sec: 0.8, cost: 200 }
+  - { level: 3, max-energy: 200, regen-per-sec: 1.0, cost: 600 }
+  - { level: 4, max-energy: 300, regen-per-sec: 1.5, cost: 1800 }
+  - { level: 5, max-energy: 450, regen-per-sec: 2.0, cost: 5000 }
+  - { level: 6, max-energy: 600, regen-per-sec: 3.0, cost: 15000 }
+
+drone-types:
+  basic:    { name: "Drone Basique",   income: 2,   interval-sec: 10, cost: 500,   bag-level-required: 1, tool-level-required: 1, energy-level-required: 1 }
+  advanced: { name: "Drone Avance",    income: 8,   interval-sec: 10, cost: 2000,  bag-level-required: 3, tool-level-required: 1, energy-level-required: 1 }
+  military: { name: "Drone Militaire", income: 25,  interval-sec: 10, cost: 8000,  bag-level-required: 1, tool-level-required: 5, energy-level-required: 1 }
+  quantum:  { name: "Drone Quantique", income: 100, interval-sec: 10, cost: 50000, bag-level-required: 6, tool-level-required: 6, energy-level-required: 6 }
+
+vending-machine-items:
+  soda:         { name: "Canette de Soda",       energy-restore: 25,  cost: 10 }
+  chocolate:    { name: "Barre Chocolatee",      energy-restore: 50,  cost: 20 }
+  energy-drink: { name: "Boisson Energisante",   energy-restore: -1,  cost: 50 }
+
+name: CleanTheBackyard
+version: '${project.version}'
+main: fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard
+api-version: '1.21'
+description: Idle-clicker backyard cleaning minigame
+authors: [TitouanLeGrall]
+website: https://cleanthebackyard.fr
+
+commands:
+  ctb:
+    description: Commandes admin CleanTheBackyard
+    usage: /ctb <stats|money|level|bag|energy|drone|buff|event|sell|reload>
+    permission: ctb.admin
+  stats:
+    description: Affiche vos statistiques personnelles
+    usage: /stats
+
+permissions:
+  ctb.admin:
+    description: Accès complet aux commandes admin CTB
+    default: op
+    children:
+      ctb.admin.stats: true
+      ctb.admin.money: true
+      ctb.admin.level: true
+      ctb.admin.bag: true
+      ctb.admin.energy: true
+      ctb.admin.drone: true
+      ctb.admin.buff: true
+      ctb.admin.event: true
+      ctb.admin.sell: true
+      ctb.admin.reload: true
+
+  ctb.admin.stats:
+    description: Voir les stats de n'importe quel joueur
+    default: op
+
+  ctb.admin.money:
+    description: Donner, retirer ou définir l'argent d'un joueur
+    default: op
+
+  ctb.admin.level:
+    description: Forcer le niveau sac/outil/énergie d'un joueur
+    default: op
+
+  ctb.admin.bag:
+    description: Remplir, vider ou modifier le sac d'un joueur
+    default: op
+
+  ctb.admin.energy:
+    description: Remplir, drainer ou définir l'énergie d'un joueur
+    default: op
+
+  ctb.admin.drone:
+    description: Donner ou retirer un drone à un joueur
+    default: op
+
+  ctb.admin.buff:
+    description: Appliquer un buff OVNI (x2 vente, énergie illimitée)
+    default: op
+
+  ctb.admin.event:
+    description: Déclencher un événement (Drone Doré, OVNI)
+    default: op
+
+  ctb.admin.sell:
+    description: Vendre le sac d'un joueur
+    default: op
+
+  ctb.admin.reload:
+    description: Recharger la configuration du plugin
+    default: op
+
+  ctb.play:
+    description: Permission de jouer à CleanTheBackyard
+    default: true
