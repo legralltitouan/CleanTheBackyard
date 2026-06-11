@@ -312,6 +312,3 @@ Le projet utilise **Maven** :
 Ce plugin est en constante évolution. Si vous rencontrez des bugs ou souhaitez proposer des améliorations, n’hésitez pas à ouvrir une *issue* ou à contacter l’auteur.
 
 **Amusez‑vous bien à nettoyer votre jardin !** 🧹✨
-```
-
----
