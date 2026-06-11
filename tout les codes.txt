@@ -601,7 +601,8 @@ public class PluginConfig {
     public record DroneConfig(
             String key, String name, double income,
             int intervalSec, long cost,
-            int bagLevelRequired, int toolLevelRequired, int energyLevelRequired
+            int bagLevelRequired, int toolLevelRequired, int energyLevelRequired,
+            double speed, int pickupRange
     ) {}
 
     public List<DroneConfig> getDroneConfigs() {
@@ -619,7 +620,9 @@ public class PluginConfig {
                     d.getLong("cost", 500),
                     d.getInt("bag-level-required", 1),
                     d.getInt("tool-level-required", 1),
-                    d.getInt("energy-level-required", 1)
+                    d.getInt("energy-level-required", 1),
+                    d.getDouble("speed", 3.0),
+                    d.getInt("pickup-range", 20)
             ));
         }
         return list;
@@ -778,6 +781,198 @@ public class PlayerData {
     // Getter brut pour la persistance
     public long getDoubleSellUntil() { return doubleSellUntil; }
     public void setRawDoubleSellUntil(long t) { this.doubleSellUntil = t; }
+}
+package fr.cleanthebackyard.cleanTheBackyard.entity;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.entity.Bee;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.Vector;
+
+import java.util.HashSet;
+import java.util.Set;
+
+public class DroneEntity {
+
+    private static final Set<String> lockedBoxes = new HashSet<>();
+    private final CleanTheBackyard plugin;
+    private final Player owner;
+    private final PluginConfig.DroneConfig config;
+    private final Bee entity;
+    private final double speed;
+    private final int pickupRange;
+    private final Material boxMaterial; // ← matériau lu depuis la config
+
+    private enum State { IDLE, MOVING_TO_BOX, MOVING_TO_SELL }
+    private State state = State.IDLE;
+    private Location targetLocation;
+    private Location lastBoxTarget;
+    private BukkitRunnable task;
+
+    public DroneEntity(Player owner, PluginConfig.DroneConfig config) {
+        this.plugin = CleanTheBackyard.getInstance();
+        this.owner = owner;
+        this.config = config;
+        this.speed = config.speed();
+        this.pickupRange = config.pickupRange();
+
+        // Lecture du matériau depuis la configuration
+        String boxMatName = plugin.getPluginConfig().getBoxBlock();
+        Material mat = Material.matchMaterial(boxMatName);
+        this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
+
+        World world = owner.getWorld();
+        Location spawnLoc = plugin.getPluginConfig().getSellZoneCenter().clone().add(0, 2, 0);
+        this.entity = (Bee) world.spawnEntity(spawnLoc, EntityType.BEE);
+        this.entity.setCustomNameVisible(true);
+        this.entity.setCustomName("§6Drone " + config.name() + " §7(§f" + owner.getName() + "§7)");
+        this.entity.setSilent(true);
+        this.entity.setInvulnerable(true);
+        this.entity.setAI(false);
+        this.entity.setCanPickupItems(false);
+        this.entity.setRemoveWhenFarAway(false);
+
+        startTask();
+    }
+
+    private void startTask() {
+        task = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (entity.isDead() || !owner.isOnline() || !owner.isValid()) {
+                    stop();
+                    return;
+                }
+                switch (state) {
+                    case IDLE -> findNewTarget();
+                    case MOVING_TO_BOX, MOVING_TO_SELL -> moveTowardsTarget();
+                }
+            }
+        };
+        task.runTaskTimer(plugin, 0L, 2L);
+    }
+
+    private void findNewTarget() {
+        Location nearestBox = findNearestBox();
+        if (nearestBox != null) {
+            targetLocation = nearestBox.clone().add(0.5, 0.5, 0.5);
+            state = State.MOVING_TO_BOX;
+        }
+    }
+
+    private Location findNearestBox() {
+        World w = entity.getWorld();
+        Location droneLoc = entity.getLocation();
+        double bestDistSq = pickupRange * pickupRange;
+        Location best = null;
+        Material boxMat = boxMaterial;
+        int minX = droneLoc.getBlockX() - pickupRange;
+        int maxX = droneLoc.getBlockX() + pickupRange;
+        int minZ = droneLoc.getBlockZ() - pickupRange;
+        int maxZ = droneLoc.getBlockZ() + pickupRange;
+        int minY = Math.max(w.getMinHeight(), droneLoc.getBlockY() - 5);
+        int maxY = Math.min(w.getMaxHeight(), droneLoc.getBlockY() + 5);
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int y = minY; y <= maxY; y++) {
+                    Location loc = new Location(w, x, y, z);
+                    if (loc.getBlock().getType() == boxMat) {
+                        String key = loc.getBlockX() + ":" + loc.getBlockY() + ":" + loc.getBlockZ();
+                        if (lockedBoxes.contains(key)) continue;
+                        if (lastBoxTarget != null && lastBoxTarget.equals(loc)) continue;
+                        double distSq = droneLoc.distanceSquared(loc);
+                        if (distSq < bestDistSq) {
+                            bestDistSq = distSq;
+                            best = loc;
+                        }
+                    }
+                }
+            }
+        }
+        if (best != null) {
+            String key = best.getBlockX() + ":" + best.getBlockY() + ":" + best.getBlockZ();
+            lockedBoxes.add(key);
+        }
+        return best;
+    }
+
+    private void moveTowardsTarget() {
+        if (targetLocation == null) {
+            state = State.IDLE;
+            return;
+        }
+        Location current = entity.getLocation();
+        double distance = current.distance(targetLocation);
+        if (distance < 0.5) {
+            if (state == State.MOVING_TO_BOX) {
+                collectBox();
+                targetLocation = plugin.getPluginConfig().getSellZoneCenter();
+                state = State.MOVING_TO_SELL;
+            } else if (state == State.MOVING_TO_SELL) {
+                sellBox();
+                if (lastBoxTarget != null) {
+                    String key = lastBoxTarget.getBlockX() + ":" + lastBoxTarget.getBlockY() + ":" + lastBoxTarget.getBlockZ();
+                    lockedBoxes.remove(key);
+                }
+                state = State.IDLE;
+                targetLocation = null;
+                lastBoxTarget = null;
+            }
+            return;
+        }
+        Vector direction = targetLocation.toVector().subtract(current.toVector()).normalize();
+        double step = speed / 20.0;
+        Location newLoc = current.clone().add(direction.multiply(step));
+        entity.teleport(newLoc);
+        entity.setRotation(
+                (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ())),
+                (float) Math.toDegrees(Math.asin(direction.getY()))
+        );
+    }
+
+    private void collectBox() {
+        if (targetLocation == null) return;
+        Location blockLoc = targetLocation.clone().subtract(0.5, 0.5, 0.5);
+        if (blockLoc.getBlock().getType() == boxMaterial) {
+            blockLoc.getBlock().setType(Material.AIR);
+            lastBoxTarget = blockLoc.clone();
+            plugin.getSectorManager().markBroken(blockLoc);
+            blockLoc.getWorld().playSound(blockLoc, org.bukkit.Sound.BLOCK_STONE_BREAK, 0.5f, 1.0f);
+        } else {
+            if (lastBoxTarget != null) {
+                String key = lastBoxTarget.getBlockX() + ":" + lastBoxTarget.getBlockY() + ":" + lastBoxTarget.getBlockZ();
+                lockedBoxes.remove(key);
+                lastBoxTarget = null;
+            }
+            state = State.IDLE;
+            targetLocation = null;
+        }
+    }
+
+    private void sellBox() {
+        PlayerData data = plugin.getPlayerDataManager().get(owner);
+        if (data == null) return;
+        double price = plugin.getPluginConfig().getBoxSellPrice();
+        plugin.getEconomyManager().credit(owner, price);
+        owner.getWorld().playSound(owner.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.5f, 1.5f);
+    }
+
+    public void stop() {
+        if (task != null && !task.isCancelled()) task.cancel();
+        if (entity != null && entity.isValid()) entity.remove();
+        if (lastBoxTarget != null) {
+            String key = lastBoxTarget.getBlockX() + ":" + lastBoxTarget.getBlockY() + ":" + lastBoxTarget.getBlockZ();
+            lockedBoxes.remove(key);
+        }
+    }
 }
 package fr.cleanthebackyard.cleanTheBackyard.gui;
 
@@ -1634,13 +1829,18 @@ public class PlayerListener implements Listener {
                             + " &7| Sac : &f" + data.getCurrentBoxes() + "/" +
                             plugin.getBoxManager().getBagCapacity(data.getBagLevel())
             ));
+            // Recréer les drones du joueur
+            plugin.getDroneManager().respawnPlayerDrones(player);
         });
     }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         UUID uuid = event.getPlayer().getUniqueId();
-        plugin.getPlayerDataManager().unloadPlayer(uuid);
+        // Détruire les drones avant de décharger les données
+        Player player = event.getPlayer();
+        plugin.getDroneManager().despawnPlayerDrones(player);
+        plugin.getPlayerDataManager().unloadPlayer(player.getUniqueId());
         currentZone.remove(uuid);
         plugin.getHudTask().forgetPlayer(uuid);
     }
@@ -2028,24 +2228,36 @@ package fr.cleanthebackyard.cleanTheBackyard.manager;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.entity.DroneEntity;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import org.bukkit.World;
+import org.bukkit.entity.Bee;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 
 import java.util.*;
 
-/**
- * Gere l'achat et la validation des drones passifs.
- * Les gains sont appliques par DroneIncomeTask.
- */
 public class DroneManager {
 
     private final CleanTheBackyard plugin;
-
-    // Stocke le dernier timestamp de paiement pour chaque drone de chaque joueur
-    private final Map<UUID, Map<String, Long>> lastPayout = new HashMap<>();
+    private final Map<UUID, List<DroneEntity>> activeDrones = new HashMap<>();
 
     public DroneManager(CleanTheBackyard plugin) {
         this.plugin = plugin;
+        cleanAllLegacyDrones();
+    }
+
+    private void cleanAllLegacyDrones() {
+        World world = plugin.getPluginConfig().getGameWorld();
+        if (world == null) return;
+        int removed = 0;
+        for (Entity e : world.getEntities()) {
+            if (e instanceof Bee && e.getCustomName() != null && e.getCustomName().contains("Drone")) {
+                e.remove();
+                removed++;
+            }
+        }
+        if (removed > 0) plugin.getLogger().info("[CTB] Nettoyé " + removed + " drones résiduels.");
     }
 
     public boolean purchaseDrone(Player player, String droneKey) {
@@ -2056,7 +2268,6 @@ public class DroneManager {
                 .getDroneConfigs().stream()
                 .filter(d -> d.key().equals(droneKey))
                 .findFirst();
-
         if (configOpt.isEmpty()) {
             player.sendMessage(ChatUtil.color("&cDrone inconnu : " + droneKey));
             return false;
@@ -2064,55 +2275,64 @@ public class DroneManager {
 
         PluginConfig.DroneConfig dc = configOpt.get();
 
-        if (data.getBagLevel() < dc.bagLevelRequired()) {
-            player.sendMessage(ChatUtil.color("&cRequis : Sac Niveau " + dc.bagLevelRequired()));
-            return false;
-        }
-        if (data.getToolLevel() < dc.toolLevelRequired()) {
-            player.sendMessage(ChatUtil.color("&cRequis : Outil Niveau " + dc.toolLevelRequired()));
-            return false;
-        }
-        if (data.getEnergyLevel() < dc.energyLevelRequired()) {
-            player.sendMessage(ChatUtil.color("&cRequis : Energie Niveau " + dc.energyLevelRequired()));
+        if (data.getBagLevel() < dc.bagLevelRequired() ||
+                data.getToolLevel() < dc.toolLevelRequired() ||
+                data.getEnergyLevel() < dc.energyLevelRequired()) {
+            player.sendMessage(ChatUtil.color("&cPrérequis manquants pour ce drone."));
             return false;
         }
 
         if (data.hasDrone(droneKey)) {
-            player.sendMessage(ChatUtil.color("&eVous possedez deja ce drone !"));
+            player.sendMessage(ChatUtil.color("&eVous possédez déjà ce drone !"));
             return false;
         }
 
         if (!plugin.getEconomyManager().debit(player, dc.cost(), dc.name())) return false;
 
         data.addDrone(droneKey);
-        player.sendMessage(ChatUtil.color(
-                "&aDrone &f" + dc.name() + " &aachete ! Il generera &f+$" + dc.income()
-                        + " &atoutes les " + dc.intervalSec() + "s."
-        ));
+        spawnDrone(player, dc);
+        player.sendMessage(ChatUtil.color("&aDrone &f" + dc.name() + " &aacheté !"));
         return true;
     }
 
-    /**
-     * Applique les revenus passifs de tous les drones de tous les joueurs connectes.
-     * Chaque drone a son propre intervalle configuré.
-     */
-    public void applyDroneIncome() {
-        long now = System.currentTimeMillis();
-        for (Player player : plugin.getServer().getOnlinePlayers()) {
-            PlayerData data = plugin.getPlayerDataManager().get(player);
-            if (data == null) continue;
+    public void spawnDrone(Player owner, PluginConfig.DroneConfig config) {
+        DroneEntity drone = new DroneEntity(owner, config);
+        activeDrones.computeIfAbsent(owner.getUniqueId(), k -> new ArrayList<>()).add(drone);
+    }
 
-            for (PluginConfig.DroneConfig dc : plugin.getPluginConfig().getDroneConfigs()) {
-                if (!data.hasDrone(dc.key())) continue;
+    public void respawnPlayerDrones(Player player) {
+        despawnPlayerDrones(player);
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+        for (PluginConfig.DroneConfig dc : plugin.getPluginConfig().getDroneConfigs()) {
+            if (data.hasDrone(dc.key())) {
+                spawnDrone(player, dc);
+            }
+        }
+    }
 
-                Map<String, Long> playerPayouts = lastPayout.computeIfAbsent(player.getUniqueId(), k -> new HashMap<>());
-                long last = playerPayouts.getOrDefault(dc.key(), 0L);
-                if (now - last >= dc.intervalSec() * 1000L) {
-                    playerPayouts.put(dc.key(), now);
-                    plugin.getEconomyManager().credit(player, dc.income());
+    public void despawnPlayerDrones(Player player) {
+        List<DroneEntity> drones = activeDrones.remove(player.getUniqueId());
+        if (drones != null) {
+            drones.forEach(DroneEntity::stop);
+        } else {
+            World world = plugin.getPluginConfig().getGameWorld();
+            if (world != null) {
+                for (Entity e : world.getEntities()) {
+                    if (e instanceof Bee && e.getCustomName() != null && e.getCustomName().contains(player.getName())) {
+                        e.remove();
+                    }
                 }
             }
         }
+    }
+
+    public void shutdown() {
+        for (List<DroneEntity> list : activeDrones.values()) {
+            list.forEach(DroneEntity::stop);
+        }
+        activeDrones.clear();
+        cleanAllLegacyDrones();
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
@@ -2875,30 +3095,6 @@ public class SectorManager {
 package fr.cleanthebackyard.cleanTheBackyard.task;
 
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
-import fr.cleanthebackyard.cleanTheBackyard.manager.DroneManager;
-import org.bukkit.scheduler.BukkitRunnable;
-
-/**
- * Tâche responsable de l'application des revenus passifs des drones.
- */
-public class DroneIncomeTask extends BukkitRunnable {
-
-    private final CleanTheBackyard plugin;
-    private final DroneManager droneManager;
-
-    public DroneIncomeTask(CleanTheBackyard plugin) {
-        this.plugin = plugin;
-        this.droneManager = plugin.getDroneManager();
-    }
-
-    @Override
-    public void run() {
-        droneManager.applyDroneIncome(); // Applique les revenus de tous les drones
-    }
-}
-package fr.cleanthebackyard.cleanTheBackyard.task;
-
-import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -3186,7 +3382,6 @@ public final class CleanTheBackyard extends JavaPlugin {
     // Tasks (handles)
     private HudTask            hudTask;
     private EnergyRegenTask    energyRegenTask;
-    private DroneIncomeTask    droneIncomeTask;
     private SectorRegenTask    sectorRegenTask;
 
     @Override
@@ -3225,12 +3420,10 @@ public final class CleanTheBackyard extends JavaPlugin {
         hudTask         = new HudTask(this);
 
         energyRegenTask = new EnergyRegenTask(this);
-        droneIncomeTask = new DroneIncomeTask(this);
         sectorRegenTask = new SectorRegenTask(this);
 
         hudTask.runTaskTimer(this, 0L, 4L);            // 4 ticks = ~200ms
         energyRegenTask.runTaskTimer(this, 20L, 20L);  // toutes les secondes
-        droneIncomeTask.runTaskTimer(this, 20L, 200L); // toutes les 10s
         sectorRegenTask.runTaskTimer(this, 40L, 80L);  // toutes les 4s
         eventManager.scheduleNextUfoEvent();
         eventManager.scheduleNextGoldenDrone(); // remplace le GoldenDroneTask
@@ -3240,6 +3433,7 @@ public final class CleanTheBackyard extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (droneManager != null) droneManager.shutdown();
         // Sauvegarde tous les profils en memoire
         if (playerDataManager != null) {
             playerDataManager.saveAll();
@@ -3395,14 +3589,46 @@ energy-upgrades:
   - { level: 6, max-energy: 600, regen-per-sec: 3.0, cost: 15000 }
 
 drone-types:
-
-  basic:    { name: "Drone Basique",   income: 2,   interval-sec: 10, cost: 500,   bag-level-required: 1, tool-level-required: 1, energy-level-required: 1 }
-
-  advanced: { name: "Drone Avance",    income: 8,   interval-sec: 10, cost: 2000,  bag-level-required: 3, tool-level-required: 1, energy-level-required: 1 }
-
-  military: { name: "Drone Militaire", income: 25,  interval-sec: 10, cost: 8000,  bag-level-required: 1, tool-level-required: 5, energy-level-required: 1 }
-
-  quantum:  { name: "Drone Quantique", income: 100, interval-sec: 10, cost: 50000, bag-level-required: 6, tool-level-required: 6, energy-level-required: 6 }
+  basic:
+    name: "Drone Basique"
+    income: 2
+    interval-sec: 10
+    cost: 500
+    bag-level-required: 1
+    tool-level-required: 1
+    energy-level-required: 1
+    speed: 2.5
+    pickup-range: 15
+  advanced:
+    name: "Drone Avance"
+    income: 8
+    interval-sec: 10
+    cost: 2000
+    bag-level-required: 3
+    tool-level-required: 1
+    energy-level-required: 1
+    speed: 4.0
+    pickup-range: 25
+  military:
+    name: "Drone Militaire"
+    income: 25
+    interval-sec: 10
+    cost: 8000
+    bag-level-required: 1
+    tool-level-required: 5
+    energy-level-required: 1
+    speed: 5.5
+    pickup-range: 35
+  quantum:
+    name: "Drone Quantique"
+    income: 100
+    interval-sec: 10
+    cost: 50000
+    bag-level-required: 6
+    tool-level-required: 6
+    energy-level-required: 6
+    speed: 8.0
+    pickup-range: 50
 
 vending-machine-items:
 
@@ -3411,7 +3637,6 @@ vending-machine-items:
   chocolate:    { name: "Barre Chocolatee",      energy-restore: 50,  cost: 20 }
 
   energy-drink: { name: "Boisson Energisante",   energy-restore: -1,  cost: 50 }
-
 name: CleanTheBackyard
 version: '${project.version}'
 main: fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard
