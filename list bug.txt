@@ -1,4 +1,4 @@
-- faire en sorte que ce soit des drones réel qui se déplace pour prendre les box et les vendres
+- faire en sorte que le drone prenne de l'altitude dans ces déplacement
 - faire en sorte que les cartons soit presque des entitée de model engine avec un beau modèle de carton
 - faire en sorte que sous plusieurs carton se trouve des objects de valeurs, des casettes de jeu, etc que l'on pourra nettoyer (par un minijeu de timing) et vendre un peu cher
 - faire en sorte que l'argent qu'on a soit visuelement stocket quelquepart dans notre garage et que les rats puisse nous voler parfois de l'argent, il faudra améliorer des pieges ou camera de surveillance, etc
