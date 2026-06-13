@@ -1,8 +1,4 @@
-Un drone va parfois bugger et tourner en rond sur une box à l'infini sans jamais la prendre
-L'event boxrain ne marche pas, il y a pas de box qui spawn
-l'event ufo donne des chose trop cheat. (en vrai ca va)
-aussi il faut que l'up de prestige retir tout la progression de drone
-aussi affiche quand les quetes font se réinitialiser, avec un timer
+L'event boxrain marche mais les box solide spawn avant l'annimation de falling.
 
 
 - faire en sorte que le drone prenne de l'altitude dans ces déplacement
