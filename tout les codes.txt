@@ -962,6 +962,9 @@ import java.util.HashSet;
 import java.util.Set;
 public class DroneEntity {
     private static final Set<String> lockedBoxes = new HashSet<>();
+    // Timeouts (en ticks, 1 tick = ~100ms vu que le task tourne toutes les 2 ticks)
+    private static final long CHASE_TIMEOUT_TICKS = 200; // 20s max pour atteindre une box
+    private static final long SELL_TIMEOUT_TICKS  = 200; // 20s max pour rentrer vendre
     private final CleanTheBackyard plugin;
     private final Player owner;
     private final PluginConfig.DroneConfig config;
@@ -976,15 +979,16 @@ public class DroneEntity {
     private Location targetLocation;
     private Location lastBoxTarget;
     private BukkitRunnable task;
-    // Stats live
     private long collectedSinceSpawn = 0;
     private long idleTicksCounter = 0;
+    private long stateTickCounter = 0; // compteur depuis le dernier changement d'état
+    private double lastDistance = Double.MAX_VALUE;
+    private int stuckTicks = 0;
     public DroneEntity(Player owner, PluginConfig.DroneConfig config) {
         this.plugin = CleanTheBackyard.getInstance();
         this.owner = owner;
         this.config = config;
         this.world = owner.getWorld();
-        // Récupère les upgrades du joueur pour ce drone
         PlayerData data = plugin.getPlayerDataManager().get(owner);
         int[] tiers = (data != null) ? data.getDroneUpgrades(config.key()) : new int[]{0, 0, 0};
         double speedBonus  = 1.0 + tiers[0] * plugin.getPluginConfig().getDroneSpeedTierBonus();
@@ -1026,6 +1030,26 @@ public class DroneEntity {
     private String lockKey(Location loc) {
         return loc.getWorld().getName() + ":" + loc.getBlockX() + ":" + loc.getBlockY() + ":" + loc.getBlockZ();
     }
+    private void setState(State newState) {
+        if (state != newState) {
+            state = newState;
+            stateTickCounter = 0;
+            lastDistance = Double.MAX_VALUE;
+            stuckTicks = 0;
+            updateName();
+        }
+    }
+    private void releaseLock() {
+        if (lastBoxTarget != null) {
+            lockedBoxes.remove(lockKey(lastBoxTarget));
+            lastBoxTarget = null;
+        }
+    }
+    private void abortAndReset() {
+        releaseLock();
+        targetLocation = null;
+        setState(State.IDLE);
+    }
     private void startTask() {
         task = new BukkitRunnable() {
             @Override
@@ -1038,11 +1062,37 @@ public class DroneEntity {
                     stop();
                     return;
                 }
+                stateTickCounter++;
                 switch (state) {
                     case IDLE, NO_TARGET -> findNewTarget();
-                    case MOVING_TO_BOX, MOVING_TO_SELL -> moveTowardsTarget();
+                    case MOVING_TO_BOX -> {
+                        // Timeout chasse
+                        if (stateTickCounter > CHASE_TIMEOUT_TICKS) {
+                            abortAndReset();
+                            return;
+                        }
+                        // Vérif que la box existe toujours
+                        if (targetLocation != null) {
+                            Location blockLoc = targetLocation.clone().subtract(0.5, 0.5, 0.5);
+                            if (blockLoc.getBlock().getType() != boxMaterial) {
+                                abortAndReset();
+                                return;
+                            }
+                        }
+                        moveTowardsTarget();
+                    }
+                    case MOVING_TO_SELL -> {
+                        if (stateTickCounter > SELL_TIMEOUT_TICKS) {
+                            // On force la vente même si on n'y arrive pas
+                            sellBox();
+                            releaseLock();
+                            targetLocation = null;
+                            setState(State.IDLE);
+                            return;
+                        }
+                        moveTowardsTarget();
+                    }
                 }
-                // Rafraîchit le nom toutes les ~1s
                 if (idleTicksCounter++ % 10 == 0) updateName();
             }
         };
@@ -1052,14 +1102,9 @@ public class DroneEntity {
         Location nearestBox = findNearestBox();
         if (nearestBox != null) {
             targetLocation = nearestBox.clone().add(0.5, 0.5, 0.5);
-            State old = state;
-            state = State.MOVING_TO_BOX;
-            if (old == State.NO_TARGET) updateName();
+            setState(State.MOVING_TO_BOX);
         } else {
-            if (state != State.NO_TARGET) {
-                state = State.NO_TARGET;
-                updateName();
-            }
+            if (state != State.NO_TARGET) setState(State.NO_TARGET);
         }
     }
     private Location findNearestBox() {
@@ -1079,7 +1124,6 @@ public class DroneEntity {
                     if (loc.getBlock().getType() == boxMaterial) {
                         String key = lockKey(loc);
                         if (lockedBoxes.contains(key)) continue;
-                        if (lastBoxTarget != null && lastBoxTarget.equals(loc)) continue;
                         double distSq = droneLoc.distanceSquared(loc);
                         if (distSq < bestDistSq) {
                             bestDistSq = distSq;
@@ -1089,34 +1133,54 @@ public class DroneEntity {
                 }
             }
         }
-        if (best != null) lockedBoxes.add(lockKey(best));
+        if (best != null) {
+            lockedBoxes.add(lockKey(best));
+            lastBoxTarget = best.clone();
+        }
         return best;
     }
     private void moveTowardsTarget() {
         if (targetLocation == null) {
-            state = State.IDLE;
+            setState(State.IDLE);
             return;
         }
         Location current = entity.getLocation();
         double distance = current.distance(targetLocation);
-        if (distance < 0.5) {
+        // Détection de blocage : si on n'avance pas pendant 20 ticks (~2s)
+        if (Math.abs(distance - lastDistance) < 0.05) {
+            stuckTicks++;
+            if (stuckTicks > 20) {
+                // On essaie un petit boost vertical pour se débloquer
+                if (stuckTicks < 30) {
+                    Location boosted = current.clone().add(0, 0.5, 0);
+                    entity.teleport(boosted);
+                } else {
+                    // Vraiment bloqué : on abandonne cette cible
+                    abortAndReset();
+                    return;
+                }
+            }
+        } else {
+            stuckTicks = 0;
+        }
+        lastDistance = distance;
+        if (distance < 0.7) {
             if (state == State.MOVING_TO_BOX) {
                 collectBox();
                 targetLocation = plugin.getPluginConfig().getSellZoneCenter(world);
-                state = State.MOVING_TO_SELL;
-                updateName();
+                setState(State.MOVING_TO_SELL);
             } else if (state == State.MOVING_TO_SELL) {
                 sellBox();
-                if (lastBoxTarget != null) lockedBoxes.remove(lockKey(lastBoxTarget));
-                state = State.IDLE;
+                releaseLock();
                 targetLocation = null;
-                lastBoxTarget = null;
-                updateName();
+                setState(State.IDLE);
             }
             return;
         }
         Vector direction = targetLocation.toVector().subtract(current.toVector()).normalize();
         double step = speed / 20.0;
+        // Cap le déplacement par tick à la distance restante pour éviter de dépasser
+        step = Math.min(step, distance);
         Location newLoc = current.clone().add(direction.multiply(step));
         entity.teleport(newLoc);
         entity.setRotation(
@@ -1129,16 +1193,13 @@ public class DroneEntity {
         Location blockLoc = targetLocation.clone().subtract(0.5, 0.5, 0.5);
         if (blockLoc.getBlock().getType() == boxMaterial) {
             blockLoc.getBlock().setType(Material.AIR);
-            lastBoxTarget = blockLoc.clone();
             plugin.getSectorManager().markBroken(blockLoc);
             blockLoc.getWorld().playSound(blockLoc, org.bukkit.Sound.BLOCK_STONE_BREAK, 0.5f, 1.0f);
         } else {
-            if (lastBoxTarget != null) {
-                lockedBoxes.remove(lockKey(lastBoxTarget));
-                lastBoxTarget = null;
-            }
-            state = State.IDLE;
+            // Box volée par un joueur ou autre drone : on abandonne proprement
+            releaseLock();
             targetLocation = null;
+            setState(State.IDLE);
         }
     }
     private void sellBox() {
@@ -1156,7 +1217,7 @@ public class DroneEntity {
     public void stop() {
         if (task != null && !task.isCancelled()) task.cancel();
         if (entity != null && entity.isValid()) entity.remove();
-        if (lastBoxTarget != null) lockedBoxes.remove(lockKey(lastBoxTarget));
+        releaseLock();
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.gui;
@@ -1253,6 +1314,7 @@ public class GuiManager {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.gui;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
@@ -1263,26 +1325,35 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+
 import java.util.List;
+
 public class PrestigeGui {
+
     private static final String TITLE = ChatUtil.color("&8[&6✦ AUTEL DE PRESTIGE ✦&8]");
     private final CleanTheBackyard plugin;
+
     public PrestigeGui(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     public void open(Player player) {
         Inventory inv = Bukkit.createInventory(null, 27, TITLE);
         build(inv, player);
         player.openInventory(inv);
     }
+
     private void build(Inventory inv, Player player) {
         ItemStack glass = new ItemBuilder(Material.MAGENTA_STAINED_GLASS_PANE).name(" ").build();
         for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, glass);
+
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return;
+
         boolean canPrestige = plugin.getPrestigeManager().canPrestige(data);
         long required = plugin.getPrestigeManager().getRequiredForNextPrestige(data);
         double bonusPercent = plugin.getPluginConfig().getPrestigeBonusPerLevel() * 100;
+
         inv.setItem(4, new ItemBuilder(Material.NETHER_STAR)
                 .name("&6Prestige actuel : &f" + data.getPrestigeLevel())
                 .lore(List.of(
@@ -1290,14 +1361,18 @@ public class PrestigeGui {
                         ChatUtil.color("&7Total gagné (lifetime) : &f$" + data.getLifetimeEarned()),
                         ChatUtil.color("&7Pour le prochain : &f$" + required)
                 )).build());
+
         inv.setItem(13, new ItemBuilder(canPrestige ? Material.BEACON : Material.BARRIER)
                 .name(canPrestige ? "&a✦ CLIC POUR PRESTIGE ✦" : "&cConditions non remplies")
                 .lore(List.of(
-                        ChatUtil.color("&7Reset : solde, niveaux sac/outil/énergie"),
-                        ChatUtil.color("&7Conservé : drones, upgrades drones, stats"),
+                        ChatUtil.color("&c⚠ Reset : solde, niveaux, sac"),
+                        ChatUtil.color("&c⚠ Reset : drones possédés + leurs upgrades"),
+                        ChatUtil.color("&7Conservé : stats lifetime, prestige"),
+                        " ",
                         ChatUtil.color("&aGain : +" + String.format("%.0f", bonusPercent) + "% gains permanents")
                 )).build());
     }
+
     public boolean handleClick(Player player, InventoryClickEvent event) {
         if (event.getRawSlot() == 13) {
             if (plugin.getPrestigeManager().prestige(player)) {
@@ -1310,6 +1385,7 @@ public class PrestigeGui {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.gui;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.DailyQuest;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
@@ -1321,32 +1397,47 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+
 public class QuestGui {
+
     private static final String TITLE = ChatUtil.color("&8[&6Quêtes Journalières&8]");
     private final CleanTheBackyard plugin;
+
     public QuestGui(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     public void open(Player player) {
         Inventory inv = Bukkit.createInventory(null, 27, TITLE);
         build(inv, player);
         player.openInventory(inv);
     }
+
     private void build(Inventory inv, Player player) {
         ItemStack glass = new ItemBuilder(Material.YELLOW_STAINED_GLASS_PANE).name(" ").build();
         for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, glass);
+
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return;
         plugin.getQuestManager().checkAndResetQuests(data);
+
         List<DailyQuest> quests = data.getDailyQuests();
         int[] slots = {11, 13, 15};
+
         for (int i = 0; i < quests.size() && i < slots.length; i++) {
             DailyQuest q = quests.get(i);
             Material mat = q.isClaimed() ? Material.LIME_DYE
                     : q.isCompleted() ? Material.EXPERIENCE_BOTTLE
                     : Material.PAPER;
+
             List<String> lore = new ArrayList<>();
             lore.add(ChatUtil.color("&7Progression : &f" + q.getProgress() + " / " + q.getTarget()));
             lore.add(ChatUtil.color("&7Récompense : &a$" + q.getReward()));
@@ -1354,14 +1445,32 @@ public class QuestGui {
             if (q.isClaimed()) lore.add(ChatUtil.color("&aRécompense récupérée"));
             else if (q.isCompleted()) lore.add(ChatUtil.color("&eClic pour récupérer la récompense !"));
             else lore.add(ChatUtil.color("&7En cours..."));
+
             inv.setItem(slots[i], new ItemBuilder(mat)
                     .name("&6" + q.getFormattedDescription())
                     .lore(lore).build());
         }
+
+        // Timer avant reset (minuit local)
         inv.setItem(22, new ItemBuilder(Material.CLOCK)
-                .name("&eReset quotidien à minuit")
+                .name("&eReset dans &f" + getTimeUntilReset())
+                .lore(List.of(
+                        ChatUtil.color("&7Les quêtes se réinitialisent à minuit."),
+                        ChatUtil.color("&7Heure locale du serveur : &f" + LocalTime.now(ZoneId.systemDefault()).withNano(0))
+                ))
                 .build());
     }
+
+    private String getTimeUntilReset() {
+        LocalDateTime now = LocalDateTime.now(ZoneId.systemDefault());
+        LocalDateTime nextMidnight = LocalDate.now(ZoneId.systemDefault()).plusDays(1).atStartOfDay();
+        Duration d = Duration.between(now, nextMidnight);
+        long h = d.toHours();
+        long m = d.toMinutesPart();
+        long s = d.toSecondsPart();
+        return String.format("%02dh %02dm %02ds", h, m, s);
+    }
+
     public boolean handleClick(Player player, InventoryClickEvent event) {
         int slot = event.getRawSlot();
         int[] slots = {11, 13, 15};
@@ -1953,7 +2062,9 @@ public class VendingMachineGui {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.listener;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -1964,53 +2075,76 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+
 public class BoxBreakListener implements Listener {
+
     private final CleanTheBackyard plugin;
     private final Material boxMaterial;
+
     public BoxBreakListener(CleanTheBackyard plugin) {
         this.plugin = plugin;
         Material mat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
         this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
     }
+
     private boolean isInHubWorld(Player player) {
         String hub = plugin.getPluginConfig().getHubWorldName();
         return player.getWorld().getName().equals(hub);
     }
+
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onPlayerInteract(PlayerInteractEvent event) {
         if (event.getAction() != Action.LEFT_CLICK_BLOCK) return;
+
         Block block = event.getClickedBlock();
         if (block == null) return;
+
         Player player = event.getPlayer();
         if (isInHubWorld(player)) return;
+
         Location loc = block.getLocation();
-        // Boîte OVNI (GLOWSTONE) — priorité avant le carton normal
+
+        // Boîte OVNI prioritaire
         if (block.getType() == Material.GLOWSTONE
                 && plugin.getEventManager().isUfoBox(loc)) {
             event.setCancelled(true);
             plugin.getEventManager().tryClaimUfoBox(player, loc);
             return;
         }
+
         if (block.getType() != boxMaterial) return;
+
         event.setCancelled(true);
+
+        // Les joueurs en créatif collectent aussi (sinon ça casse instant en vanilla)
         boolean started = plugin.getBoxManager().startCollection(player, loc);
         if (started) {
             plugin.getSectorManager().markBroken(loc);
         }
     }
-    /** Bloque le cassage vanilla des cartons ET des boîtes OVNI. */
+
+    /** Bloque le cassage vanilla des cartons ET boîtes OVNI, même pour les créatifs. */
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockBreak(BlockBreakEvent event) {
         Block b = event.getBlock();
+        Player player = event.getPlayer();
+
         if (b.getType() == boxMaterial) {
             event.setDropItems(false);
             event.setCancelled(true);
+            // En créatif on déclenche tout de même la collecte
+            if (player.getGameMode() == GameMode.CREATIVE && !isInHubWorld(player)) {
+                plugin.getBoxManager().startCollection(player, b.getLocation());
+            }
             return;
         }
         if (b.getType() == Material.GLOWSTONE
                 && plugin.getEventManager().isUfoBox(b.getLocation())) {
             event.setDropItems(false);
             event.setCancelled(true);
+            if (player.getGameMode() == GameMode.CREATIVE) {
+                plugin.getEventManager().tryClaimUfoBox(player, b.getLocation());
+            }
         }
     }
 }
@@ -2079,6 +2213,34 @@ public class ConsumableListener implements Listener {
                 "&aConsommé ! &f+" + String.format("%.0f", restored) + " &aénergie restorée."
         ));
         player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_GENERIC_EAT, 1.0f, 1.2f);
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.Material;
+import org.bukkit.entity.FallingBlock;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityChangeBlockEvent;
+public class FallingBoxListener implements Listener {
+    private final CleanTheBackyard plugin;
+    private final Material boxMaterial;
+    public FallingBoxListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        Material mat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
+        this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
+    }
+    /**
+     * Quand un FallingBlock de notre matériau de carton touche le sol,
+     * on s'assure qu'il se transforme bien en bloc (et pas en drop).
+     */
+    @EventHandler
+    public void onFallingBlockLand(EntityChangeBlockEvent event) {
+        if (!(event.getEntity() instanceof FallingBlock fb)) return;
+        if (fb.getBlockData().getMaterial() != boxMaterial) return;
+        // Laisse le FallingBlock se poser normalement (setCancelDrop(false))
+        // mais on s'assure qu'il ne fait pas de drop item parasite
+        fb.setDropItem(false);
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.listener;
@@ -2385,6 +2547,113 @@ public class VendingPurchaseListener implements Listener {
 
     public static void incrementOnPurchase(CleanTheBackyard plugin, Player player) {
         plugin.getQuestManager().onProgress(player, DailyQuest.Type.BUY_VENDING, 1);
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.GameMode;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.hanging.HangingBreakByEntityEvent;
+import org.bukkit.event.player.PlayerArmorStandManipulateEvent;
+import org.bukkit.event.player.PlayerBucketEmptyEvent;
+import org.bukkit.event.player.PlayerBucketFillEvent;
+
+/**
+ * Bloque toutes les interactions destructrices dans TOUS les mondes,
+ * sauf pour les joueurs en mode Créatif.
+ *
+ * Exceptions internes : les cartons (NOTE_BLOCK) et les boîtes OVNI (GLOWSTONE)
+ * sont déjà gérés par BoxBreakListener — on les laisse passer ici aussi
+ * pour que la mécanique fonctionne.
+ */
+public class WorldProtectionListener implements Listener {
+
+    private final CleanTheBackyard plugin;
+    private final Material boxMaterial;
+
+    public WorldProtectionListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+        Material mat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
+        this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
+    }
+
+    private boolean isCreative(Player player) {
+        return player.getGameMode() == GameMode.CREATIVE;
+    }
+
+    /** Casser des blocs interdit hors créatif (sauf cartons + boîtes OVNI). */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onBlockBreak(BlockBreakEvent event) {
+        Player player = event.getPlayer();
+        if (isCreative(player)) return;
+
+        Material type = event.getBlock().getType();
+        // Cartons : laissés à BoxBreakListener qui annule déjà
+        if (type == boxMaterial) return;
+        // Boîtes OVNI : idem
+        if (type == Material.GLOWSTONE && plugin.getEventManager().isUfoBox(event.getBlock().getLocation())) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    /** Poser des blocs interdit hors créatif. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onBlockPlace(BlockPlaceEvent event) {
+        Player player = event.getPlayer();
+        if (isCreative(player)) return;
+        event.setCancelled(true);
+    }
+
+    /** Empêche d'attaquer les mobs et autres joueurs hors créatif. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Player player)) return;
+        if (isCreative(player)) return;
+
+        // Exception : le Drone Doré (Bat) reste frappable même hors créatif
+        // → c'est géré par GoldenDroneListener qui s'exécute avant
+        if (event.getEntity() instanceof org.bukkit.entity.Bat
+                && plugin.getEventManager().isGoldenDroneSpawned()) {
+            return;
+        }
+        event.setCancelled(true);
+    }
+
+    /** Empêche de casser cadres, tableaux, etc. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onHangingBreak(HangingBreakByEntityEvent event) {
+        if (!(event.getRemover() instanceof Player player)) return;
+        if (isCreative(player)) return;
+        event.setCancelled(true);
+    }
+
+    /** Empêche les manipulations d'armor stands. */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onArmorStandManipulate(PlayerArmorStandManipulateEvent event) {
+        if (isCreative(event.getPlayer())) return;
+        event.setCancelled(true);
+    }
+
+    /** Empêche d'utiliser des seaux (eau/lave). */
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onBucketEmpty(PlayerBucketEmptyEvent event) {
+        if (isCreative(event.getPlayer())) return;
+        event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+    public void onBucketFill(PlayerBucketFillEvent event) {
+        if (isCreative(event.getPlayer())) return;
+        event.setCancelled(true);
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
@@ -2886,6 +3155,7 @@ public class EconomyManager {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
@@ -2894,16 +3164,22 @@ import fr.cleanthebackyard.cleanTheBackyard.util.LocationUtil;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.title.Title;
 import org.bukkit.*;
+import org.bukkit.block.Block;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.*;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
+
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
+
 public class EventManager {
+
     private final CleanTheBackyard plugin;
     private final Random random = new Random();
+
     // OVNI
     private boolean ufoEventActive      = false;
     private boolean ufoMultiplierActive = false;
@@ -2912,23 +3188,114 @@ public class EventManager {
     private final Map<String, UfoBoxReward> ufoBoxes = new HashMap<>();
     private final List<Location> ufoBoxLocations = new ArrayList<>();
     private BukkitTask ufoTimeoutTask = null;
+
     // Drone Doré
     private UUID     goldenDroneEntityUUID = null;
     private int      goldenDroneReward     = 0;
     private BukkitTask goldenDroneTask     = null;
     private Player   goldenDroneTarget     = null;
+
     public enum UfoBoxReward { BONUS_MONEY, DOUBLE_SELL, UNLIMITED_ENERGY, BLACK_MARKET }
-    // Matériaux valides pour la pluie de cartons (sols naturels)
-    private static final Set<Material> RAIN_VALID_GROUNDS = EnumSet.of(
-            Material.GRASS_BLOCK, Material.DIRT, Material.COARSE_DIRT, Material.PODZOL,
-            Material.SAND, Material.RED_SAND, Material.GRAVEL, Material.MYCELIUM,
-            Material.ROOTED_DIRT, Material.MUD, Material.MOSS_BLOCK
+
+    // Blacklist : blocs sur lesquels on NE pose PAS de carton (même s'ils sont "solides")
+    private static final Set<Material> RAIN_INVALID_GROUNDS = EnumSet.of(
+            // Feuilles et clôtures (existants)
+            Material.OAK_LEAVES, Material.SPRUCE_LEAVES, Material.BIRCH_LEAVES,
+            Material.JUNGLE_LEAVES, Material.ACACIA_LEAVES, Material.DARK_OAK_LEAVES,
+            Material.MANGROVE_LEAVES, Material.CHERRY_LEAVES, Material.AZALEA_LEAVES,
+            Material.FLOWERING_AZALEA_LEAVES, Material.PALE_OAK_LEAVES,
+            Material.OAK_FENCE, Material.SPRUCE_FENCE, Material.BIRCH_FENCE,
+            Material.JUNGLE_FENCE, Material.ACACIA_FENCE, Material.DARK_OAK_FENCE,
+            Material.MANGROVE_FENCE, Material.CHERRY_FENCE, Material.PALE_OAK_FENCE,
+            Material.NETHER_BRICK_FENCE, Material.IRON_BARS,
+            Material.GLASS, Material.GLASS_PANE,
+            Material.WATER, Material.LAVA, Material.BUBBLE_COLUMN,
+            Material.NOTE_BLOCK, // évite de poser sur un carton existant
+
+            // === BRIQUES (tous types) ===
+            // Brique classique
+            Material.BRICKS,
+            Material.BRICK_STAIRS,
+            Material.BRICK_SLAB,
+            Material.BRICK_WALL,
+            // Briques de pierre
+            Material.STONE_BRICKS,
+            Material.STONE_BRICK_STAIRS,
+            Material.STONE_BRICK_SLAB,
+            Material.STONE_BRICK_WALL,
+            Material.MOSSY_STONE_BRICKS,
+            Material.MOSSY_STONE_BRICK_STAIRS,
+            Material.MOSSY_STONE_BRICK_SLAB,
+            Material.MOSSY_STONE_BRICK_WALL,
+            Material.CRACKED_STONE_BRICKS,
+            Material.CHISELED_STONE_BRICKS,
+            // Briques du Nether
+            Material.NETHER_BRICKS,
+            Material.NETHER_BRICK_STAIRS,
+            Material.NETHER_BRICK_SLAB,
+            Material.NETHER_BRICK_WALL,
+            Material.RED_NETHER_BRICKS,
+            Material.RED_NETHER_BRICK_STAIRS,
+            Material.RED_NETHER_BRICK_SLAB,
+            Material.RED_NETHER_BRICK_WALL,
+            // Briques de blackstone polies
+            Material.POLISHED_BLACKSTONE_BRICKS,
+            Material.POLISHED_BLACKSTONE_BRICK_STAIRS,
+            Material.POLISHED_BLACKSTONE_BRICK_SLAB,
+            Material.POLISHED_BLACKSTONE_BRICK_WALL,
+            Material.CRACKED_POLISHED_BLACKSTONE_BRICKS,
+            Material.CHISELED_POLISHED_BLACKSTONE,
+            // Briques de terre (Mud)
+            Material.MUD_BRICKS,
+            Material.MUD_BRICK_STAIRS,
+            Material.MUD_BRICK_SLAB,
+            Material.MUD_BRICK_WALL,
+
+            // === BOIS ÉCORCÉ (stripped logs) ===
+            Material.STRIPPED_OAK_LOG,
+            Material.STRIPPED_SPRUCE_LOG,
+            Material.STRIPPED_BIRCH_LOG,
+            Material.STRIPPED_JUNGLE_LOG,
+            Material.STRIPPED_ACACIA_LOG,
+            Material.STRIPPED_DARK_OAK_LOG,
+            Material.STRIPPED_MANGROVE_LOG,
+            Material.STRIPPED_CHERRY_LOG,
+            Material.STRIPPED_PALE_OAK_LOG,
+            // Variantes "wood" (sans les cernes)
+            Material.STRIPPED_OAK_WOOD,
+            Material.STRIPPED_SPRUCE_WOOD,
+            Material.STRIPPED_BIRCH_WOOD,
+            Material.STRIPPED_JUNGLE_WOOD,
+            Material.STRIPPED_ACACIA_WOOD,
+            Material.STRIPPED_DARK_OAK_WOOD,
+            Material.STRIPPED_MANGROVE_WOOD,
+            Material.STRIPPED_CHERRY_WOOD,
+            Material.STRIPPED_PALE_OAK_WOOD,
+
+            // === DIORITE POLIE ===
+            Material.POLISHED_DIORITE,
+            Material.POLISHED_DIORITE_STAIRS,
+            Material.POLISHED_DIORITE_SLAB,
+
+            // === RUCHES ===
+            Material.BEEHIVE,
+            Material.BEE_NEST,
+
+            // === Barrière Invisible ===
+            Material.BARRIER,
+
+
+            Material.BEDROCK,
+            Material.SMOOTH_STONE
     );
+
     public void triggerBoxRainNow() { triggerBoxRain(); }
     public void triggerBlackMarketNow() { triggerBlackMarket(); }
+
     public EventManager(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     private List<Player> getAllCtbPlayers() {
         String hub = plugin.getPluginConfig().getHubWorldName();
         String prefix = plugin.getPluginConfig().getPlayerWorldPrefix();
@@ -2940,86 +3307,189 @@ public class EventManager {
         }
         return list;
     }
-    /** Vrai si le joueur est dans SON monde personnel. */
+
     private boolean isInOwnWorld(Player p) {
         String expected = plugin.getPluginConfig().getPlayerWorldName(p.getUniqueId());
         return p.getWorld().getName().equals(expected);
     }
+
     // ── PLANIFICATIONS ────────────────────────────────────────────────
     public void scheduleNextUfoEvent() {
         PluginConfig cfg = plugin.getPluginConfig();
         int delay = cfg.getUfoMin() + random.nextInt(Math.max(1, cfg.getUfoMax() - cfg.getUfoMin()));
         Bukkit.getScheduler().runTaskLater(plugin, this::startUfoEvent, delay * 20L);
     }
+
     public void scheduleNextGoldenDrone() {
         PluginConfig cfg = plugin.getPluginConfig();
         int delay = cfg.getGoldenDroneMin()
                 + random.nextInt(Math.max(1, cfg.getGoldenDroneMax() - cfg.getGoldenDroneMin()));
         Bukkit.getScheduler().runTaskLater(plugin, this::spawnGoldenDrone, delay * 20L);
     }
+
     public void scheduleNextBoxRain() {
         PluginConfig cfg = plugin.getPluginConfig();
         int delay = cfg.getBoxRainMin()
                 + random.nextInt(Math.max(1, cfg.getBoxRainMax() - cfg.getBoxRainMin()));
         Bukkit.getScheduler().runTaskLater(plugin, this::triggerBoxRain, delay * 20L);
+        plugin.getLogger().info("[CTB] Prochaine pluie de cartons dans " + delay + "s.");
     }
+
     public void scheduleNextBlackMarket() {
         PluginConfig cfg = plugin.getPluginConfig();
         int delay = cfg.getBlackMarketMin()
                 + random.nextInt(Math.max(1, cfg.getBlackMarketMax() - cfg.getBlackMarketMin()));
         Bukkit.getScheduler().runTaskLater(plugin, this::triggerBlackMarket, delay * 20L);
     }
-    // ── PLUIE DE CARTONS (corrigée) ───────────────────────────────────
+
+    // ── PLUIE DE CARTONS (refonte) ────────────────────────────────────
+
+    /**
+     * Détermine si un bloc est un sol acceptable pour poser un carton dessus.
+     * On accepte tout bloc plein/solide qui n'est pas explicitement blacklisté.
+     */
+    private boolean isValidGround(Block block) {
+        Material mat = block.getType();
+        if (mat.isAir()) return false;
+        if (RAIN_INVALID_GROUNDS.contains(mat)) return false;
+        // Évite les fluides, plantes, items posés au sol, etc.
+        if (!mat.isSolid()) return false;
+        return true;
+    }
+
+    /**
+     * Cherche le premier sol valide en partant du haut du monde et en descendant.
+     * Retourne la location du bloc SOLIDE (pas celle de l'air au-dessus).
+     */
+    private Location findGroundLocation(World w, int x, int z, int referenceY) {
+        int maxY = Math.min(w.getMaxHeight() - 1, referenceY + 30);
+        int minY = Math.max(w.getMinHeight() + 1, referenceY - 30);
+
+        // On descend depuis le haut
+        for (int y = maxY; y >= minY; y--) {
+            Block ground = w.getBlockAt(x, y, z);
+            if (isValidGround(ground)) {
+                // Vérifie qu'il y a au moins 1 bloc d'air au-dessus pour poser
+                Block above = w.getBlockAt(x, y + 1, z);
+                if (above.getType().isAir()) {
+                    return ground.getLocation();
+                }
+            }
+        }
+        return null;
+    }
+
     private void triggerBoxRain() {
         List<Player> targets = getAllCtbPlayers();
         if (targets.isEmpty()) {
+            plugin.getLogger().info("[CTB] BoxRain : aucun joueur CTB en ligne.");
             scheduleNextBoxRain();
             return;
         }
+
         Material boxMat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
         if (boxMat == null) boxMat = Material.NOTE_BLOCK;
         final Material finalMat = boxMat;
-        // Annonce uniquement aux joueurs dans LEUR monde
+        final BlockData fallingData = Bukkit.createBlockData(finalMat);
+
+        List<Player> participants = new ArrayList<>();
         for (Player p : targets) {
-            if (!isInOwnWorld(p)) continue;
-            p.sendMessage(ChatUtil.color("&3[PLUIE DE CARTONS] &fDes cartons tombent du ciel pendant 30 secondes !"));
+            if (!isInOwnWorld(p)) {
+                plugin.getLogger().info("[CTB] BoxRain : " + p.getName() + " skipped (pas dans son monde).");
+                continue;
+            }
+            participants.add(p);
+            p.sendMessage(ChatUtil.color("&3[PLUIE DE CARTONS] &fDes cartons tombent du ciel pendant 30 secondes autour de toi !"));
             p.playSound(p.getLocation(), Sound.WEATHER_RAIN, 1.0f, 1.0f);
         }
-        new BukkitRunnable() {
-            int ticks = 0;
-            final int MAX_TICKS = 30;
-            final int MAX_BOXES_PER_TICK_PER_PLAYER = 3;
+
+        if (participants.isEmpty()) {
+            plugin.getLogger().warning("[CTB] BoxRain : aucun participant éligible (joueurs pas dans leur monde).");
+            scheduleNextBoxRain();
+            return;
+        }
+
+        plugin.getLogger().info("[CTB] BoxRain démarré pour " + participants.size() + " joueur(s).");
+
+        BukkitTask rainTask = new BukkitRunnable() {
+            int iteration = 0;
+            final int MAX_ITERATIONS = 30;
+            final int BOXES_PER_ITERATION_PER_PLAYER = 4;
             final int RADIUS = 12;
-            @Override public void run() {
-                if (ticks++ > MAX_TICKS) { cancel(); return; }
-                for (Player p : getAllCtbPlayers()) {
-                    if (!isInOwnWorld(p)) continue;
+            int totalPlaced = 0;
+            int totalAttempts = 0;
+            // Échantillonnage pour debug : on log le matériau rencontré la 1re fois
+            final Map<Material, Integer> rejectedMaterials = new HashMap<>();
+
+            @Override
+            public void run() {
+                if (iteration >= MAX_ITERATIONS) {
+                    plugin.getLogger().info("[CTB] BoxRain terminé. Total placé : "
+                            + totalPlaced + " / " + totalAttempts + " tentatives.");
+                    if (totalPlaced == 0 && !rejectedMaterials.isEmpty()) {
+                        StringBuilder sb = new StringBuilder("[CTB] BoxRain : matériaux rejetés rencontrés : ");
+                        rejectedMaterials.forEach((m, n) -> sb.append(m.name()).append("x").append(n).append(" "));
+                        plugin.getLogger().warning(sb.toString());
+                    }
+                    cancel();
+                    return;
+                }
+                iteration++;
+
+                for (Player p : participants) {
+                    if (!p.isOnline() || !isInOwnWorld(p)) continue;
                     World w = p.getWorld();
                     Location center = p.getLocation();
+
                     int placed = 0;
                     int attempts = 0;
-                    while (placed < MAX_BOXES_PER_TICK_PER_PLAYER && attempts < 12) {
+                    while (placed < BOXES_PER_ITERATION_PER_PLAYER && attempts < 30) {
                         attempts++;
+                        totalAttempts++;
+
                         double angle = random.nextDouble() * Math.PI * 2;
-                        double dist = 3 + random.nextDouble() * RADIUS;
+                        double dist  = 3 + random.nextDouble() * RADIUS;
                         int x = (int) Math.round(center.getX() + Math.cos(angle) * dist);
                         int z = (int) Math.round(center.getZ() + Math.sin(angle) * dist);
-                        // Trouver le sol valide
-                        int topY = w.getHighestBlockYAt(x, z);
-                        Location ground = new Location(w, x, topY - 1, z);
-                        Material groundMat = ground.getBlock().getType();
-                        if (!RAIN_VALID_GROUNDS.contains(groundMat)) continue;
-                        Location above = new Location(w, x, topY, z);
-                        if (above.getBlock().getType() != Material.AIR) continue;
-                        above.getBlock().setType(finalMat, false);
-                        w.spawnParticle(Particle.CLOUD, above.clone().add(0.5, 0.5, 0.5), 4, 0.2, 0.2, 0.2, 0.01);
+
+                        Location groundLoc = findGroundLocation(w, x, z, center.getBlockY());
+                        if (groundLoc == null) {
+                            // Pour debug : on note le matériau de la colonne
+                            Block probe = w.getBlockAt(x, center.getBlockY(), z);
+                            rejectedMaterials.merge(probe.getType(), 1, Integer::sum);
+                            continue;
+                        }
+
+                        Location placeLoc = groundLoc.clone().add(0, 1, 0);
+
+                        // Pose immédiate du bloc (garantit le succès)
+                        placeLoc.getBlock().setType(finalMat, false);
+
+                        // Effet visuel : FallingBlock fantôme qui tombe puis disparaît
+                        Location visualSpawn = placeLoc.clone().add(0.5, 10, 0.5);
+                        try {
+                            FallingBlock fb = w.spawnFallingBlock(visualSpawn, fallingData);
+                            fb.setDropItem(false);
+                            fb.setHurtEntities(false);
+                            fb.setCancelDrop(true);
+                            fb.setVelocity(new Vector(0, -0.05, 0));
+                            w.playSound(placeLoc, Sound.ENTITY_CHICKEN_EGG, 0.3f, 1.5f);
+                            w.spawnParticle(Particle.CLOUD, visualSpawn, 5, 0.2, 0, 0.2, 0.01);
+                        } catch (Throwable t) {
+                            plugin.getLogger().warning("[CTB] BoxRain : FallingBlock spawn failed : " + t.getMessage());
+                        }
+
                         placed++;
+                        totalPlaced++;
                     }
                 }
             }
         }.runTaskTimer(plugin, 0L, 20L);
+
+        plugin.getLogger().info("[CTB] BoxRain task scheduled (id=" + rainTask.getTaskId() + ")");
         scheduleNextBoxRain();
     }
+
     // ── MARCHÉ NOIR ───────────────────────────────────────────────────
     private void triggerBlackMarket() {
         List<Player> targets = getAllCtbPlayers();
@@ -3040,6 +3510,7 @@ public class EventManager {
         }
         scheduleNextBlackMarket();
     }
+
     // ── OVNI ──────────────────────────────────────────────────────────
     private void startUfoEvent() {
         List<Player> ctbPlayers = getAllCtbPlayers();
@@ -3051,6 +3522,7 @@ public class EventManager {
         ufoBoxCount.set(0);
         ufoQuota = Math.max(1, ctbPlayers.size()) * 10;
         spawnUfoBoxes(ctbPlayers);
+
         Title title = Title.title(
                 Component.text(ChatUtil.color("&5ALERTE OVNI !")),
                 Component.text(ChatUtil.color("&dDes caisses spéciales sont apparues !")),
@@ -3062,11 +3534,14 @@ public class EventManager {
             p.showTitle(title);
             p.playSound(p.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.5f);
         }
+
         new BukkitRunnable() {
             @Override public void run() { if (ufoEventActive) endUfoEvent(false); }
         }.runTaskLater(plugin, 20L * 600);
+
         scheduleUfoBoxTimeout();
     }
+
     private void scheduleUfoBoxTimeout() {
         if (ufoTimeoutTask != null) ufoTimeoutTask.cancel();
         ufoTimeoutTask = new BukkitRunnable() {
@@ -3085,10 +3560,12 @@ public class EventManager {
             }
         }.runTaskLater(plugin, 20L * 30);
     }
+
     private void spawnUfoBoxes(List<Player> ctbPlayers) {
         ufoBoxes.clear();
         ufoBoxLocations.clear();
         if (ctbPlayers.isEmpty()) return;
+
         UfoBoxReward[] rewards = UfoBoxReward.values();
         for (Player target : ctbPlayers) {
             if (!isInOwnWorld(target)) continue;
@@ -3108,41 +3585,48 @@ public class EventManager {
             }
         }
     }
+
+    // ── Récompenses OVNI rééquilibrées ────────────────────────────────
     public boolean tryClaimUfoBox(Player player, Location loc) {
         String key = LocationUtil.locKey(loc);
         UfoBoxReward reward = ufoBoxes.remove(key);
         if (reward == null) return false;
+
         ufoBoxLocations.removeIf(l -> LocationUtil.locKey(l).equals(key));
         loc.getBlock().setType(Material.AIR, false);
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return true;
+
         int avgLevel = Math.max(1, (data.getBagLevel() + data.getToolLevel() + data.getEnergyLevel()) / 3);
+
         switch (reward) {
             case BONUS_MONEY -> {
-                int bonus = 50 + avgLevel * 75 + random.nextInt(Math.max(1, avgLevel * 50));
+                int bonus = 20 + avgLevel * 15 + random.nextInt(Math.max(1, avgLevel * 10));
                 plugin.getEconomyManager().credit(player, bonus);
-                player.sendMessage(ChatUtil.colored("&6[OVNI] &fCaisse ! &a+$" + bonus));
+                player.sendMessage(ChatUtil.colored("&6[OVNI] &fCaisse mystérieuse ! &a+$" + bonus));
             }
             case DOUBLE_SELL -> {
-                int duration = 20 + avgLevel * 10;
+                int duration = Math.min(60, 10 + avgLevel * 2);
                 data.setDoubleSell(duration);
-                player.sendMessage(ChatUtil.colored("&6[OVNI] &ex2 VENTE perso +" + duration + "s"));
+                player.sendMessage(ChatUtil.colored("&6[OVNI] &ex2 VENTE perso pendant &f" + duration + "s"));
             }
             case UNLIMITED_ENERGY -> {
-                int duration = 30 + avgLevel * 15;
+                int duration = Math.min(60, 15 + avgLevel * 3);
                 data.setUnlimitedEnergy(duration);
                 plugin.getBoxManager().removeFatigue(player, data);
-                player.sendMessage(ChatUtil.colored("&6[OVNI] &bÉNERGIE ILLIMITÉE +" + duration + "s"));
+                player.sendMessage(ChatUtil.colored("&6[OVNI] &bÉnergie illimitée pendant &f" + duration + "s"));
             }
             case BLACK_MARKET -> {
-                int duration = 30 + avgLevel * 5;
+                int duration = Math.min(30, 10 + avgLevel);
                 data.setBlackMarket(duration);
-                player.sendMessage(ChatUtil.colored("&6[OVNI] &5MARCHÉ NOIR x3 +" + duration + "s"));
+                player.sendMessage(ChatUtil.colored("&6[OVNI] &5Marché noir x3 pendant &f" + duration + "s"));
             }
         }
         return true;
     }
+
     public boolean isUfoBox(Location loc) { return ufoBoxes.containsKey(LocationUtil.locKey(loc)); }
+
     public void onBoxBroken(Location loc) {
         if (!ufoEventActive) return;
         int count = ufoBoxCount.incrementAndGet();
@@ -3153,6 +3637,7 @@ public class EventManager {
         }
         if (count >= ufoQuota) endUfoEvent(true);
     }
+
     private void endUfoEvent(boolean success, boolean skipNextSchedule) {
         ufoEventActive = false;
         if (ufoTimeoutTask != null) { ufoTimeoutTask.cancel(); ufoTimeoutTask = null; }
@@ -3161,10 +3646,13 @@ public class EventManager {
         });
         ufoBoxes.clear();
         ufoBoxLocations.clear();
+
         if (success) activateSellMultiplier();
         if (!skipNextSchedule) scheduleNextUfoEvent();
     }
+
     private void endUfoEvent(boolean success) { endUfoEvent(success, false); }
+
     private void activateSellMultiplier() {
         ufoMultiplierActive = true;
         plugin.getPluginConfig().setGlobalSellMultiplier(2.0);
@@ -3178,11 +3666,13 @@ public class EventManager {
             ufoMultiplierActive = false;
         }, DURATION * 20L);
     }
+
     // ── DRONE DORÉ ────────────────────────────────────────────────────
     public void spawnGoldenDrone() {
         if (goldenDroneEntityUUID != null) return;
         List<Player> ctbPlayers = getAllCtbPlayers();
         if (ctbPlayers.isEmpty()) { scheduleNextGoldenDrone(); return; }
+
         goldenDroneTarget = ctbPlayers.get(random.nextInt(ctbPlayers.size()));
         if (!isInOwnWorld(goldenDroneTarget)) {
             scheduleNextGoldenDrone();
@@ -3190,23 +3680,28 @@ public class EventManager {
         }
         PlayerData targetData = plugin.getPlayerDataManager().get(goldenDroneTarget);
         goldenDroneReward = calculateDroneReward(targetData);
+
         Location spawnLoc = goldenDroneTarget.getLocation().clone().add(
                 (random.nextDouble() - 0.5) * 6,
                 4 + random.nextDouble() * 2,
                 (random.nextDouble() - 0.5) * 6
         );
+
         Bat drone = (Bat) spawnLoc.getWorld().spawnEntity(spawnLoc, EntityType.BAT);
         drone.setCustomName(ChatUtil.color("&6✦ Drone Doré [$" + goldenDroneReward + "] ✦"));
         drone.setCustomNameVisible(true);
         drone.setRemoveWhenFarAway(false);
         drone.setAware(false);
         goldenDroneEntityUUID = drone.getUniqueId();
+
         double angle = random.nextDouble() * Math.PI * 2;
         drone.setVelocity(new Vector(Math.cos(angle) * 0.15, 0.05, Math.sin(angle) * 0.15));
+
         goldenDroneTarget.sendMessage(ChatUtil.color(
                 "&6[DRONE DORÉ] &eDrone Doré apparu ! Frappe-le en moins de &f30s &epour &f$" + goldenDroneReward
         ));
         goldenDroneTarget.playSound(goldenDroneTarget.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL, 1.0f, 1.5f);
+
         final UUID droneUUID = goldenDroneEntityUUID;
         goldenDroneTask = new BukkitRunnable() {
             int ticks = 0;
@@ -3225,6 +3720,7 @@ public class EventManager {
             }
         }.runTaskTimer(plugin, 2L, 2L);
     }
+
     private int calculateDroneReward(PlayerData data) {
         if (data == null) return 500 + random.nextInt(500);
         int baseReward = 500 + random.nextInt(500);
@@ -3234,6 +3730,7 @@ public class EventManager {
         baseReward *= (1 + data.getPrestigeLevel() / 2);
         return baseReward;
     }
+
     private void expireGoldenDrone(boolean timeout) {
         Player target = goldenDroneTarget;
         goldenDroneEntityUUID = null;
@@ -3245,6 +3742,7 @@ public class EventManager {
         }
         scheduleNextGoldenDrone();
     }
+
     public boolean claimGoldenDrone(Player player, UUID entityUUID) {
         if (goldenDroneEntityUUID == null || !goldenDroneEntityUUID.equals(entityUUID)) return false;
         int reward = goldenDroneReward;
@@ -3259,16 +3757,19 @@ public class EventManager {
         scheduleNextGoldenDrone();
         return true;
     }
+
     public boolean isUfoEventActive()      { return ufoEventActive; }
     public boolean isUfoMultiplierActive() { return ufoMultiplierActive; }
     public boolean isGoldenDroneSpawned()  { return goldenDroneEntityUUID != null; }
     public int     getUfoBoxCount()        { return ufoBoxCount.get(); }
     public int     getUfoQuota()           { return ufoQuota; }
+
     public void forceStartUfoEvent() {
         if (ufoEventActive) endUfoEvent(false, true);
         startUfoEvent();
     }
 }
+
 package fr.cleanthebackyard.cleanTheBackyard.manager;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.DailyQuest;
@@ -3427,6 +3928,7 @@ public class PlayerDataManager {
     private File getFile(UUID uuid) { return new File(playersFolder, uuid.toString() + ".yml"); }
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
@@ -3434,22 +3936,30 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.title.Title;
 import org.bukkit.Sound;
 import org.bukkit.entity.Player;
+
 import java.time.Duration;
+import java.util.Map;
+
 public class PrestigeManager {
+
     private final CleanTheBackyard plugin;
+
     public PrestigeManager(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     public boolean canPrestige(PlayerData data) {
         long required = plugin.getPluginConfig().getPrestigeRequiredEarned()
-                * (long) Math.pow(2, data.getPrestigeLevel()); // doublé à chaque prestige
+                * (long) Math.pow(2, data.getPrestigeLevel());
         return data.getLifetimeEarned() >= required
                 && data.getPrestigeLevel() < plugin.getPluginConfig().getPrestigeMaxLevel();
     }
+
     public long getRequiredForNextPrestige(PlayerData data) {
         return plugin.getPluginConfig().getPrestigeRequiredEarned()
                 * (long) Math.pow(2, data.getPrestigeLevel());
     }
+
     public boolean prestige(Player player) {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return false;
@@ -3458,14 +3968,25 @@ public class PrestigeManager {
             player.sendMessage(ChatUtil.color("&cIl te manque &f$" + need + "&c (gains totaux) pour prestige !"));
             return false;
         }
-        // Reset des progressions (sauf prestige, drones, stats lifetime)
+
+        // Reset complet : solde, niveaux, sac, drones possédés ET upgrades drones
         data.setBalance(0);
         data.setBagLevel(1);
         data.setToolLevel(1);
         data.setEnergyLevel(1);
         data.setCurrentEnergy(100);
         data.clearBag();
+
+        // Reset des drones et de leurs upgrades
+        data.getOwnedDrones().clear();
+        data.getAllDroneUpgrades().clear();
+        // On garde les stats drone (lifetime, pour le tableau d'honneur)
+
+        // Despawn tous les drones physiques du joueur
+        plugin.getDroneManager().despawnPlayerDrones(player);
+
         data.setPrestigeLevel(data.getPrestigeLevel() + 1);
+
         double bonus = plugin.getPluginConfig().getPrestigeBonusPerLevel() * 100;
         Title title = Title.title(
                 Component.text(ChatUtil.color("&6✦ PRESTIGE " + data.getPrestigeLevel() + " ✦")),
@@ -3476,6 +3997,7 @@ public class PrestigeManager {
         player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.8f);
         player.sendMessage(ChatUtil.color("&6Tu as prestige ! Bonus permanent : &f+"
                 + String.format("%.0f", bonus * data.getPrestigeLevel()) + "% &6sur tous tes gains."));
+        player.sendMessage(ChatUtil.color("&7Reset effectué : solde, niveaux, sac, drones et leurs upgrades."));
         return true;
     }
 }
@@ -3997,12 +4519,15 @@ public final class CleanTheBackyard extends JavaPlugin {
         prestigeManager   = new PrestigeManager(this);
 
         // Listeners
-        getServer().getPluginManager().registerEvents(new PlayerListener(this),     this);
-        getServer().getPluginManager().registerEvents(new BoxBreakListener(this),   this);
-        getServer().getPluginManager().registerEvents(new GuiListener(this),        this);
-        getServer().getPluginManager().registerEvents(new ConsumableListener(this), this);
-        getServer().getPluginManager().registerEvents(new GoldenDroneListener(this),this);
-        getServer().getPluginManager().registerEvents(new GameRuleListener(this),   this);
+        getServer().getPluginManager().registerEvents(new PlayerListener(this),         this);
+        getServer().getPluginManager().registerEvents(new BoxBreakListener(this),       this);
+        getServer().getPluginManager().registerEvents(new GuiListener(this),            this);
+        getServer().getPluginManager().registerEvents(new ConsumableListener(this),     this);
+        getServer().getPluginManager().registerEvents(new GoldenDroneListener(this),    this);
+        getServer().getPluginManager().registerEvents(new GameRuleListener(this),       this);
+        getServer().getPluginManager().registerEvents(new FallingBoxListener(this),     this);
+        getServer().getPluginManager().registerEvents(new WorldProtectionListener(this),this);
+        getServer().getPluginManager().registerEvents(new VendingPurchaseListener(this),this);
 
         // Commands
         var ctbCmd = getCommand("ctb");
@@ -4017,9 +4542,6 @@ public final class CleanTheBackyard extends JavaPlugin {
             var c = getCommand(name);
             if (c != null) c.setExecutor(playCommand);
         }
-
-        // Hook : suivi des achats au distributeur pour les quêtes
-        getServer().getPluginManager().registerEvents(new VendingPurchaseListener(this), this);
 
         // Tasks
         hudTask         = new HudTask(this);
@@ -4058,7 +4580,6 @@ public final class CleanTheBackyard extends JavaPlugin {
     public PrestigeManager   getPrestigeManager()  { return prestigeManager; }
     public HudTask           getHudTask()          { return hudTask; }
 }
-
 # =============================================
 #   CleanTheBackyard v0.3 - Config rééquilibrée
 # =============================================
@@ -4404,4 +4925,3 @@ permissions:
         </plugins>
     </build>
 </project>
-
