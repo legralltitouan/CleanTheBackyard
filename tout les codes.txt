@@ -1,7 +1,9 @@
 package fr.cleanthebackyard.cleanTheBackyard.command;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -9,45 +11,54 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
+
 import java.util.ArrayList;
 import java.util.List;
+
 public class AdminCommand implements CommandExecutor, TabCompleter {
+
     private final CleanTheBackyard plugin;
+
     public AdminCommand(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
                              @NotNull String label, String[] args) {
-        if (args.length == 0) { sendHelp(sender); return true; }
+        if (args.length == 0) {
+            sendHelp(sender);
+            return true;
+        }
         String sub = args[0].toLowerCase();
         if (!sender.hasPermission("ctb.admin")) {
-            sender.sendMessage(ChatUtil.color("&cPas la permission.")); return true;
+            sender.sendMessage(ChatUtil.color("&cPas la permission."));
+            return true;
         }
         if (!sender.hasPermission("ctb.admin." + sub)) {
-            sender.sendMessage(ChatUtil.color("&cPermission manquante pour cette commande.")); return true;
+            sender.sendMessage(ChatUtil.color("&cPermission manquante pour cette commande."));
+            return true;
         }
         switch (sub) {
-            case "stats"    -> cmdStats(sender, args);
-            case "money"    -> cmdMoney(sender, args);
-            case "level"    -> cmdLevel(sender, args);
-            case "bag"      -> cmdBag(sender, args);
-            case "energy"   -> cmdEnergy(sender, args);
-            case "drone"    -> cmdDrone(sender, args);
-            case "buff"     -> cmdBuff(sender, args);
-            case "event"    -> cmdEvent(sender, args);
-            case "sell"     -> cmdSell(sender, args);
+            case "stats" -> cmdStats(sender, args);
+            case "money" -> cmdMoney(sender, args);
+            case "level" -> cmdLevel(sender, args);
+            case "bag" -> cmdBag(sender, args);
+            case "energy" -> cmdEnergy(sender, args);
+            case "drone" -> cmdDrone(sender, args);
+            case "buff" -> cmdBuff(sender, args);
+            case "event" -> cmdEvent(sender, args);
+            case "sell" -> cmdSell(sender, args);
             case "prestige" -> cmdPrestige(sender, args);
-            case "quest"    -> cmdQuest(sender, args);
-            case "reload"   -> cmdReload(sender);
-            // Dans le switch principal de onCommand, ajoute :
+            case "quest" -> cmdQuest(sender, args);
+            case "rat" -> cmdRat(sender, args);
+            case "reload" -> cmdReload(sender);
             case "hud" -> cmdHud(sender);
-            default         -> sendHelp(sender);
+            default -> sendHelp(sender);
         }
         return true;
     }
 
-    // Nouvelle méthode :
     private void cmdHud(CommandSender sender) {
         if (!(sender instanceof Player p)) {
             sender.sendMessage(ChatUtil.color("&cCommande joueur uniquement."));
@@ -59,83 +70,129 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                 : "&7HUD désactivé."));
     }
 
+    private void cmdRat(CommandSender sender, String[] args) {
+        Player target = resolveTarget(sender, args, 1);
+        if (target == null) return;
+        boolean ok = plugin.getRatManager().forceSpawnRat(target);
+        if (ok) {
+            sender.sendMessage(ChatUtil.color("&aRat forcé sur &f" + target.getName() + "&a !"));
+        } else {
+            sender.sendMessage(ChatUtil.color("&cImpossible : le joueur n'est pas dans son monde, ou un rat est déjà actif."));
+        }
+    }
+
     private void cmdStats(CommandSender sender, String[] args) {
         Player target = resolveTarget(sender, args, 1);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
-        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
+        if (data == null) {
+            sender.sendMessage(ChatUtil.color("&cDonnées introuvables."));
+            return;
+        }
         double globalMult = plugin.getPluginConfig().getGlobalSellMultiplier();
         sender.sendMessage(ChatUtil.color("&8══ &aStats de &f" + target.getName() + " &8══"));
         sender.sendMessage(ChatUtil.color("&7Prestige       : &6" + data.getPrestigeLevel()));
-        sender.sendMessage(ChatUtil.color("&7Solde          : &f$" + String.format("%.0f", data.getBalance())));
-        sender.sendMessage(ChatUtil.color("&7Total gagné    : &f$" + data.getLifetimeEarned()));
-        sender.sendMessage(ChatUtil.color("&7Cartons cassés : &f" + data.getTotalBoxesBroken()));
+        sender.sendMessage(ChatUtil.color("&7Solde          : &f" + NumberFormatUtil.money(data.getBalance())));
+        sender.sendMessage(ChatUtil.color("&7Total gagné    : &f" + NumberFormatUtil.money(data.getLifetimeEarned())));
+        sender.sendMessage(ChatUtil.color("&7Volé par rats  : &c" + NumberFormatUtil.money(data.getTotalStolenByRats())));
+        sender.sendMessage(ChatUtil.color("&7Cartons cassés : &f" + NumberFormatUtil.format(data.getTotalBoxesBroken())));
         sender.sendMessage(ChatUtil.color("&7Sac            : &f" + data.getCurrentBoxes() + "/" + plugin.getBoxManager().getBagCapacity(data.getBagLevel()) + " (Niv " + data.getBagLevel() + ")"));
         sender.sendMessage(ChatUtil.color("&7Outil          : &fNiv " + data.getToolLevel()));
         sender.sendMessage(ChatUtil.color("&7Énergie        : &f" + String.format("%.0f", data.getCurrentEnergy()) + "/" + plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel()) + " (Niv " + data.getEnergyLevel() + ")"));
         sender.sendMessage(ChatUtil.color("&7Drones         : &f" + data.getOwnedDrones().size()));
+        sender.sendMessage(ChatUtil.color("&7Sécurité       : &fCaméra Niv " + data.getSecurityLevel() + " | Piège Niv " + data.getTrapLevel()));
         sender.sendMessage(ChatUtil.color("&7Buff x2 vente  : &f" + (data.hasDoubleSell() ? "&aActif &f(" + data.getDoubleSellRemainingSeconds() + "s)" : "&cInactif")));
         sender.sendMessage(ChatUtil.color("&7Marché Noir x3 : &f" + (data.hasBlackMarket() ? "&aActif &f(" + data.getBlackMarketRemainingSeconds() + "s)" : "&cInactif")));
         sender.sendMessage(ChatUtil.color("&7Bonus global   : &fx" + String.format("%.1f", globalMult)));
         sender.sendMessage(ChatUtil.color("&7Énergie illim. : &f" + (data.hasUnlimitedEnergy() ? "&aActive &f(" + data.getUnlimitedEnergyRemainingSeconds() + "s)" : "&cInactive")));
         sender.sendMessage(ChatUtil.color("&8══════════════════════"));
     }
+
     private void cmdMoney(CommandSender sender, String[] args) {
-        if (args.length < 4) { sender.sendMessage(usage("money give|set|take <joueur> <montant>")); return; }
+        if (args.length < 4) {
+            sender.sendMessage(usage("money give|set|take <joueur> <montant>"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
-        if (data == null) { sender.sendMessage(ChatUtil.color("&cDonnées introuvables.")); return; }
-        double amount;
-        try { amount = Double.parseDouble(args[3]); } catch (NumberFormatException e) {
-            sender.sendMessage(ChatUtil.color("&cMontant invalide.")); return;
+        if (data == null) {
+            sender.sendMessage(ChatUtil.color("&cDonnées introuvables."));
+            return;
         }
-        if (amount <= 0) { sender.sendMessage(ChatUtil.color("&cMontant doit être > 0.")); return; }
+        double amount;
+        try {
+            amount = Double.parseDouble(args[3]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage(ChatUtil.color("&cMontant invalide."));
+            return;
+        }
+        if (amount <= 0) {
+            sender.sendMessage(ChatUtil.color("&cMontant doit être > 0."));
+            return;
+        }
         switch (args[1].toLowerCase()) {
             case "give" -> {
                 data.addBalance(amount);
-                sender.sendMessage(ChatUtil.color("&a+$" + String.format("%.0f", amount) + " &fdonné à &a" + target.getName()));
+                sender.sendMessage(ChatUtil.color("&a+" + NumberFormatUtil.money(amount) + " &fdonné à &a" + target.getName()));
             }
             case "take" -> {
                 if (!data.removeBalance(amount)) {
-                    sender.sendMessage(ChatUtil.color("&cSolde insuffisant.")); return;
+                    sender.sendMessage(ChatUtil.color("&cSolde insuffisant."));
+                    return;
                 }
-                sender.sendMessage(ChatUtil.color("&c-$" + String.format("%.0f", amount) + " &fprélevé."));
+                sender.sendMessage(ChatUtil.color("&c-" + NumberFormatUtil.money(amount) + " &fprélevé."));
             }
             case "set" -> {
                 data.setBalance(amount);
-                sender.sendMessage(ChatUtil.color("&fSolde défini à &f$" + String.format("%.0f", amount)));
+                sender.sendMessage(ChatUtil.color("&fSolde défini à &f" + NumberFormatUtil.money(amount)));
             }
             default -> sender.sendMessage(usage("money give|set|take <joueur> <montant>"));
         }
     }
+
     private void cmdLevel(CommandSender sender, String[] args) {
-        if (args.length < 4) { sender.sendMessage(usage("level bag|tool|energy <joueur> <niveau>")); return; }
+        if (args.length < 4) {
+            sender.sendMessage(usage("level bag|tool|energy <joueur> <niveau>"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
         if (data == null) return;
         int level;
-        try { level = Integer.parseInt(args[3]); } catch (NumberFormatException e) {
-            sender.sendMessage(ChatUtil.color("&cNiveau invalide.")); return;
+        try {
+            level = Integer.parseInt(args[3]);
+        } catch (NumberFormatException e) {
+            sender.sendMessage(ChatUtil.color("&cNiveau invalide."));
+            return;
         }
         if (level < 1) return;
         switch (args[1].toLowerCase()) {
             case "bag" -> {
                 int max = plugin.getPluginConfig().getBagUpgrades().size();
-                if (level > max) { sender.sendMessage(ChatUtil.color("&cMax : " + max)); return; }
+                if (level > max) {
+                    sender.sendMessage(ChatUtil.color("&cMax : " + max));
+                    return;
+                }
                 data.setBagLevel(level);
                 sender.sendMessage(ChatUtil.color("&aSac défini niveau " + level));
             }
             case "tool" -> {
                 int max = plugin.getPluginConfig().getToolUpgrades().size();
-                if (level > max) { sender.sendMessage(ChatUtil.color("&cMax : " + max)); return; }
+                if (level > max) {
+                    sender.sendMessage(ChatUtil.color("&cMax : " + max));
+                    return;
+                }
                 data.setToolLevel(level);
                 sender.sendMessage(ChatUtil.color("&aOutil défini niveau " + level));
             }
             case "energy" -> {
                 int max = plugin.getPluginConfig().getEnergyUpgrades().size();
-                if (level > max) { sender.sendMessage(ChatUtil.color("&cMax : " + max)); return; }
+                if (level > max) {
+                    sender.sendMessage(ChatUtil.color("&cMax : " + max));
+                    return;
+                }
                 data.setEnergyLevel(level);
                 data.setCurrentEnergy(plugin.getBoxManager().getMaxEnergyForLevel(level));
                 sender.sendMessage(ChatUtil.color("&aÉnergie définie niveau " + level));
@@ -143,8 +200,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("level bag|tool|energy <joueur> <niveau>"));
         }
     }
+
     private void cmdBag(CommandSender sender, String[] args) {
-        if (args.length < 3) { sender.sendMessage(usage("bag fill|clear|set <joueur> [quantité]")); return; }
+        if (args.length < 3) {
+            sender.sendMessage(usage("bag fill|clear|set <joueur> [quantité]"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
@@ -155,11 +216,18 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
                 data.setCurrentBoxes(cap);
                 sender.sendMessage(ChatUtil.color("&aSac rempli."));
             }
-            case "clear" -> { data.clearBag(); sender.sendMessage(ChatUtil.color("&aSac vidé.")); }
+            case "clear" -> {
+                data.clearBag();
+                sender.sendMessage(ChatUtil.color("&aSac vidé."));
+            }
             case "set" -> {
                 if (args.length < 4) return;
                 int amount;
-                try { amount = Integer.parseInt(args[3]); } catch (NumberFormatException e) { return; }
+                try {
+                    amount = Integer.parseInt(args[3]);
+                } catch (NumberFormatException e) {
+                    return;
+                }
                 int cap = plugin.getBoxManager().getBagCapacity(data.getBagLevel());
                 data.setCurrentBoxes(Math.min(amount, cap));
                 sender.sendMessage(ChatUtil.color("&aSac défini à " + Math.min(amount, cap)));
@@ -167,8 +235,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("bag fill|clear|set <joueur> [quantité]"));
         }
     }
+
     private void cmdEnergy(CommandSender sender, String[] args) {
-        if (args.length < 3) { sender.sendMessage(usage("energy fill|set|drain <joueur> [valeur]")); return; }
+        if (args.length < 3) {
+            sender.sendMessage(usage("energy fill|set|drain <joueur> [valeur]"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
@@ -188,15 +260,23 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             case "set" -> {
                 if (args.length < 4) return;
                 double val;
-                try { val = Double.parseDouble(args[3]); } catch (NumberFormatException e) { return; }
+                try {
+                    val = Double.parseDouble(args[3]);
+                } catch (NumberFormatException e) {
+                    return;
+                }
                 data.setCurrentEnergy(Math.min(val, maxEnergy));
                 sender.sendMessage(ChatUtil.color("&aÉnergie : " + val));
             }
             default -> sender.sendMessage(usage("energy fill|set|drain <joueur> [valeur]"));
         }
     }
+
     private void cmdDrone(CommandSender sender, String[] args) {
-        if (args.length < 4) { sender.sendMessage(usage("drone give|remove <joueur> <clé>")); return; }
+        if (args.length < 4) {
+            sender.sendMessage(usage("drone give|remove <joueur> <clé>"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
@@ -204,7 +284,10 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         String droneKey = args[3].toLowerCase();
         boolean exists = plugin.getPluginConfig().getDroneConfigs().stream()
                 .anyMatch(d -> d.key().equals(droneKey));
-        if (!exists) { sender.sendMessage(ChatUtil.color("&cDrone inconnu.")); return; }
+        if (!exists) {
+            sender.sendMessage(ChatUtil.color("&cDrone inconnu."));
+            return;
+        }
         switch (args[1].toLowerCase()) {
             case "give" -> {
                 if (data.hasDrone(droneKey)) return;
@@ -219,14 +302,22 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("drone give|remove <joueur> <clé>"));
         }
     }
+
     private void cmdBuff(CommandSender sender, String[] args) {
-        if (args.length < 4) { sender.sendMessage(usage("buff doublesell|unlimitedenergy|blackmarket <joueur> <secondes>")); return; }
+        if (args.length < 4) {
+            sender.sendMessage(usage("buff doublesell|unlimitedenergy|blackmarket <joueur> <secondes>"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
         if (data == null) return;
         int seconds;
-        try { seconds = Integer.parseInt(args[3]); } catch (NumberFormatException e) { return; }
+        try {
+            seconds = Integer.parseInt(args[3]);
+        } catch (NumberFormatException e) {
+            return;
+        }
         if (seconds <= 0) return;
         switch (args[1].toLowerCase()) {
             case "doublesell" -> {
@@ -245,19 +336,25 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("buff doublesell|unlimitedenergy|blackmarket <joueur> <secondes>"));
         }
     }
+
     private void cmdEvent(CommandSender sender, String[] args) {
-        if (args.length < 2) { sender.sendMessage(usage("event drone|ufo|boxrain|blackmarket")); return; }
+        if (args.length < 2) {
+            sender.sendMessage(usage("event drone|ufo|boxrain|blackmarket"));
+            return;
+        }
         switch (args[1].toLowerCase()) {
             case "drone" -> {
                 if (plugin.getEventManager().isGoldenDroneSpawned()) {
-                    sender.sendMessage(ChatUtil.color("&eDéjà actif.")); return;
+                    sender.sendMessage(ChatUtil.color("&eDéjà actif."));
+                    return;
                 }
                 plugin.getEventManager().spawnGoldenDrone();
                 sender.sendMessage(ChatUtil.color("&6Drone Doré invoqué."));
             }
             case "ufo" -> {
                 if (plugin.getEventManager().isUfoEventActive()) {
-                    sender.sendMessage(ChatUtil.color("&eDéjà actif.")); return;
+                    sender.sendMessage(ChatUtil.color("&eDéjà actif."));
+                    return;
                 }
                 plugin.getEventManager().forceStartUfoEvent();
                 sender.sendMessage(ChatUtil.color("&5OVNI déclenché."));
@@ -273,14 +370,19 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("event drone|ufo|boxrain|blackmarket"));
         }
     }
+
     private void cmdSell(CommandSender sender, String[] args) {
         Player target = resolveTarget(sender, args, 1);
         if (target == null) return;
         plugin.getEconomyManager().sellBag(target);
         sender.sendMessage(ChatUtil.color("&aSac vendu pour " + target.getName()));
     }
+
     private void cmdPrestige(CommandSender sender, String[] args) {
-        if (args.length < 3) { sender.sendMessage(usage("prestige set|add <joueur> <niveau>")); return; }
+        if (args.length < 3) {
+            sender.sendMessage(usage("prestige set|add <joueur> <niveau>"));
+            return;
+        }
         Player target = getOnlinePlayer(sender, args[2]);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
@@ -290,7 +392,11 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             return;
         }
         int val;
-        try { val = Integer.parseInt(args[3]); } catch (NumberFormatException e) { return; }
+        try {
+            val = Integer.parseInt(args[3]);
+        } catch (NumberFormatException e) {
+            return;
+        }
         switch (args[1].toLowerCase()) {
             case "set" -> {
                 data.setPrestigeLevel(Math.max(0, val));
@@ -303,8 +409,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("prestige set|add <joueur> <niveau>"));
         }
     }
+
     private void cmdQuest(CommandSender sender, String[] args) {
-        if (args.length < 2) { sender.sendMessage(usage("quest reset|show <joueur>")); return; }
+        if (args.length < 2) {
+            sender.sendMessage(usage("quest reset|show <joueur>"));
+            return;
+        }
         Player target = args.length >= 3 ? getOnlinePlayer(sender, args[2]) : (sender instanceof Player ? (Player) sender : null);
         if (target == null) return;
         PlayerData data = plugin.getPlayerDataManager().get(target);
@@ -327,11 +437,13 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
             default -> sender.sendMessage(usage("quest reset|show <joueur>"));
         }
     }
+
     private void cmdReload(CommandSender sender) {
         plugin.reloadConfig();
         plugin.getPlayerDataManager().saveAll();
         sender.sendMessage(ChatUtil.color("&aConfiguration rechargée."));
     }
+
     @Override
     public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command,
                                       @NotNull String label, String[] args) {
@@ -340,19 +452,19 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         List<String> droneKeys = plugin.getPluginConfig().getDroneConfigs().stream().map(d -> d.key()).toList();
         if (args.length == 1) {
             completions.addAll(List.of("stats", "money", "level", "bag", "energy", "drone",
-                    "buff", "event", "sell", "prestige", "quest", "hud", "reload"));
+                    "buff", "event", "sell", "prestige", "quest", "rat", "hud", "reload"));
         } else if (args.length == 2) {
             completions.addAll(switch (args[0].toLowerCase()) {
-                case "money"    -> List.of("give", "set", "take");
-                case "level"    -> List.of("bag", "tool", "energy");
-                case "bag"      -> List.of("fill", "clear", "set");
-                case "energy"   -> List.of("fill", "set", "drain");
-                case "drone"    -> List.of("give", "remove");
-                case "buff"     -> List.of("doublesell", "unlimitedenergy", "blackmarket");
-                case "event"    -> List.of("drone", "ufo", "boxrain", "blackmarket");
+                case "money" -> List.of("give", "set", "take");
+                case "level" -> List.of("bag", "tool", "energy");
+                case "bag" -> List.of("fill", "clear", "set");
+                case "energy" -> List.of("fill", "set", "drain");
+                case "drone" -> List.of("give", "remove");
+                case "buff" -> List.of("doublesell", "unlimitedenergy", "blackmarket");
+                case "event" -> List.of("drone", "ufo", "boxrain", "blackmarket");
                 case "prestige" -> List.of("set", "add");
-                case "quest"    -> List.of("reset", "show");
-                case "stats", "sell" -> playerNames;
+                case "quest" -> List.of("reset", "show");
+                case "stats", "sell", "rat" -> playerNames;
                 default -> List.of();
             });
         } else if (args.length == 3) {
@@ -370,20 +482,24 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         String filter = args[args.length - 1].toLowerCase();
         return completions.stream().filter(s -> s.toLowerCase().startsWith(filter)).toList();
     }
+
     private Player resolveTarget(CommandSender sender, String[] args, int argIndex) {
         if (args.length > argIndex) return getOnlinePlayer(sender, args[argIndex]);
         if (sender instanceof Player p) return p;
         sender.sendMessage(ChatUtil.color("&cSpécifiez un joueur."));
         return null;
     }
+
     private Player getOnlinePlayer(CommandSender sender, String name) {
         Player p = Bukkit.getPlayerExact(name);
         if (p == null) sender.sendMessage(ChatUtil.color("&cJoueur introuvable : " + name));
         return p;
     }
+
     private String usage(String syntax) {
         return ChatUtil.color("&cUsage : &f/ctb " + syntax);
     }
+
     private void sendHelp(CommandSender sender) {
         sender.sendMessage(ChatUtil.color("&8══ &6CTB Admin &8══"));
         sender.sendMessage(ChatUtil.color("&e/ctb stats &7[joueur]"));
@@ -397,16 +513,16 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         sender.sendMessage(ChatUtil.color("&e/ctb sell &7[joueur]"));
         sender.sendMessage(ChatUtil.color("&e/ctb prestige &7set|add <joueur> <niveau>"));
         sender.sendMessage(ChatUtil.color("&e/ctb quest &7reset|show [joueur]"));
+        sender.sendMessage(ChatUtil.color("&e/ctb rat &7[joueur] &8- force le spawn d'un rat"));
         sender.sendMessage(ChatUtil.color("&e/ctb reload"));
-        // Dans sendHelp, ajoute la ligne :
         sender.sendMessage(ChatUtil.color("&e/ctb hud &7- toggle l'actionbar"));
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.command;
-
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -417,21 +533,16 @@ import org.mvplugins.multiverse.core.MultiverseCoreApi;
 import org.mvplugins.multiverse.core.world.MultiverseWorld;
 import org.mvplugins.multiverse.core.world.WorldManager;
 import org.mvplugins.multiverse.core.world.options.CloneWorldOptions;
-
 import java.io.File;
 import java.util.UUID;
-
 public class PlayCommand implements CommandExecutor {
-
     private final CleanTheBackyard plugin;
-
     public PlayCommand(CleanTheBackyard plugin) {
         this.plugin = plugin;
         if (Bukkit.getPluginManager().getPlugin("Multiverse-Core") == null) {
             plugin.getLogger().severe("[CTB] Multiverse-Core introuvable !");
         }
     }
-
     private WorldManager getWorldManager() {
         try { return MultiverseCoreApi.get().getWorldManager(); }
         catch (Throwable t) {
@@ -439,7 +550,6 @@ public class PlayCommand implements CommandExecutor {
             return null;
         }
     }
-
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
                              @NotNull String label, String[] args) {
@@ -447,54 +557,50 @@ public class PlayCommand implements CommandExecutor {
             sender.sendMessage(ChatUtil.color("&cCommande joueur uniquement."));
             return true;
         }
-
-        // Routage : commandes top-level + sous-commandes /ctbplay
         String name = label.toLowerCase();
         String sub;
-
         if (name.equals("ctbplay")) {
             if (args.length == 0) { sendHelp(player); return true; }
             sub = args[0].toLowerCase();
         } else {
-            sub = name; // /create, /go, /spawn
+            sub = name;
         }
-
         switch (sub) {
             case "create" -> handleCreate(player);
-            case "go"     -> handleGo(player);
-            case "spawn"  -> handleSpawn(player);
-            default       -> sendHelp(player);
+            case "go" -> handleGo(player);
+            case "spawn" -> handleSpawn(player);
+            case "setspawn" -> handleSetSpawn(player);
+            case "setplayerspawn" -> handleSetPlayerSpawn(player);
+            default -> sendHelp(player);
         }
         return true;
     }
-
     private void sendHelp(Player player) {
         player.sendMessage(ChatUtil.color("&8══ &aClean The Backyard &8══"));
         player.sendMessage(ChatUtil.color("&e/create &7- Créer ton monde personnel"));
         player.sendMessage(ChatUtil.color("&e/go &7- Aller dans ton monde personnel"));
         player.sendMessage(ChatUtil.color("&e/spawn &7- Retourner au hub"));
+        if (player.hasPermission("ctb.admin.setspawn")) {
+            player.sendMessage(ChatUtil.color("&e/setspawn &7- Définir le spawn du hub (admin)"));
+            player.sendMessage(ChatUtil.color("&e/setplayerspawn &7- Définir le spawn dans le monde joueur (admin)"));
+        }
         player.sendMessage(ChatUtil.color("&8══════════════════"));
     }
-
     private void handleCreate(Player player) {
         WorldManager wm = getWorldManager();
         if (wm == null) { player.sendMessage(ChatUtil.color("&cMultiverse inaccessible.")); return; }
-
         UUID uuid = player.getUniqueId();
         String worldName = plugin.getPluginConfig().getPlayerWorldName(uuid);
-
         if (Bukkit.getWorld(worldName) != null || worldFolderExists(worldName)) {
             player.sendMessage(ChatUtil.color("&eTon monde existe déjà. Utilise &f/go&e."));
             return;
         }
-
         String templateName = plugin.getPluginConfig().getTemplateWorldName();
         MultiverseWorld template = wm.getWorld(templateName).getOrNull();
         if (template == null) {
             player.sendMessage(ChatUtil.color("&cTemplate &f" + templateName + " &cnon chargé."));
             return;
         }
-
         player.sendMessage(ChatUtil.color("&aCréation du monde depuis le template..."));
         var result = wm.cloneWorld(CloneWorldOptions.fromTo(template, worldName));
         if (!result.isSuccess()) {
@@ -507,7 +613,8 @@ public class PlayCommand implements CommandExecutor {
             player.sendMessage(ChatUtil.color("&cMonde cloné mais introuvable. Redémarre si besoin."));
             return;
         }
-        player.teleport(newWorld.getSpawnLocation());
+        Location spawn = plugin.getPluginConfig().getPlayerWorldSpawn(newWorld);
+        player.teleport(spawn != null ? spawn : newWorld.getSpawnLocation());
         player.sendMessage(ChatUtil.color("&aTon monde &f" + worldName + " &aest prêt !"));
         plugin.getServer().getScheduler().runTaskLater(plugin,
                 () -> plugin.getDroneManager().respawnPlayerDrones(player), 20L);
@@ -527,20 +634,49 @@ public class PlayCommand implements CommandExecutor {
             player.sendMessage(ChatUtil.color("&cTon monde n'existe pas. Utilise &f/create&c."));
             return;
         }
-        player.teleport(w.getSpawnLocation());
+        Location spawn = plugin.getPluginConfig().getPlayerWorldSpawn(w);
+        player.teleport(spawn != null ? spawn : w.getSpawnLocation());
         player.sendMessage(ChatUtil.color("&aTéléporté dans &f" + w.getName() + "&a."));
         plugin.getServer().getScheduler().runTaskLater(plugin,
                 () -> plugin.getDroneManager().respawnPlayerDrones(player), 10L);
     }
     private void handleSpawn(Player player) {
-        World hub = plugin.getPluginConfig().getHubWorld();
-        if (hub == null) {
-            player.sendMessage(ChatUtil.color("&cMonde hub introuvable."));
+        Location spawn = plugin.getPluginConfig().getHubSpawnLocation();
+        if (spawn == null || spawn.getWorld() == null) {
+            player.sendMessage(ChatUtil.color("&cSpawn du hub introuvable."));
             return;
         }
         plugin.getDroneManager().despawnPlayerDrones(player);
-        player.teleport(hub.getSpawnLocation());
-        player.sendMessage(ChatUtil.color("&aRetour au hub (&f" + hub.getName() + "&a)."));
+        player.teleport(spawn);
+        player.sendMessage(ChatUtil.color("&aRetour au hub."));
+    }
+    private void handleSetSpawn(Player player) {
+        if (!player.hasPermission("ctb.admin.setspawn")) {
+            player.sendMessage(ChatUtil.color("&cPermission manquante (ctb.admin.setspawn)."));
+            return;
+        }
+        World hub = plugin.getPluginConfig().getHubWorld();
+        if (hub == null || !player.getWorld().equals(hub)) {
+            player.sendMessage(ChatUtil.color("&cTu dois être dans le monde hub (&f"
+                    + plugin.getPluginConfig().getHubWorldName() + "&c) pour définir le spawn."));
+            return;
+        }
+        plugin.getPluginConfig().setHubSpawn(player.getLocation());
+        player.sendMessage(ChatUtil.color("&aSpawn du hub défini sur ta position."));
+    }
+    private void handleSetPlayerSpawn(Player player) {
+        if (!player.hasPermission("ctb.admin.setspawn")) {
+            player.sendMessage(ChatUtil.color("&cPermission manquante (ctb.admin.setspawn)."));
+            return;
+        }
+        String templateName = plugin.getPluginConfig().getTemplateWorldName();
+        if (!player.getWorld().getName().equals(templateName)) {
+            player.sendMessage(ChatUtil.color("&cTu dois être dans le monde template (&f"
+                    + templateName + "&c) pour définir le spawn joueur."));
+            return;
+        }
+        plugin.getPluginConfig().setPlayerWorldSpawn(player.getLocation());
+        player.sendMessage(ChatUtil.color("&aSpawn des mondes joueurs défini sur ta position."));
     }
     private boolean worldFolderExists(String worldName) {
         File worldFolder = new File(Bukkit.getWorldContainer(), worldName);
@@ -548,55 +684,82 @@ public class PlayCommand implements CommandExecutor {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.config;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.util.BoundingBox;
+
 import java.util.*;
+
 public class PluginConfig {
+
     private final CleanTheBackyard plugin;
     private FileConfiguration cfg;
-    // Cache des records (chargés au démarrage / reload)
+
     private List<BagUpgrade> bagUpgrades = List.of();
     private List<ToolUpgrade> toolUpgrades = List.of();
     private List<EnergyUpgrade> energyUpgrades = List.of();
     private List<DroneConfig> droneConfigs = List.of();
     private List<VendingItem> vendingItems = List.of();
-    // Lookup maps pour O(1)
+    private List<SecurityUpgrade> securityUpgrades = List.of();
+    private List<TrapUpgrade> trapUpgrades = List.of();
+
     private Map<Integer, BagUpgrade> bagByLevel = Map.of();
     private Map<Integer, ToolUpgrade> toolByLevel = Map.of();
     private Map<Integer, EnergyUpgrade> energyByLevel = Map.of();
     private Map<String, DroneConfig> droneByKey = Map.of();
+    private Map<Integer, SecurityUpgrade> securityByLevel = Map.of();
+    private Map<Integer, TrapUpgrade> trapByLevel = Map.of();
+
     public PluginConfig(CleanTheBackyard plugin) {
         this.plugin = plugin;
         this.cfg = plugin.getConfig();
         loadAll();
     }
+
     public void reload() {
         plugin.reloadConfig();
         this.cfg = plugin.getConfig();
         loadAll();
     }
+
     private void loadAll() {
         bagUpgrades = Collections.unmodifiableList(loadBagUpgrades());
         toolUpgrades = Collections.unmodifiableList(loadToolUpgrades());
         energyUpgrades = Collections.unmodifiableList(loadEnergyUpgrades());
         droneConfigs = Collections.unmodifiableList(loadDroneConfigs());
         vendingItems = Collections.unmodifiableList(loadVendingItems());
+        securityUpgrades = Collections.unmodifiableList(loadSecurityUpgrades());
+        trapUpgrades = Collections.unmodifiableList(loadTrapUpgrades());
+
         Map<Integer, BagUpgrade> bm = new HashMap<>();
         bagUpgrades.forEach(u -> bm.put(u.level(), u));
         bagByLevel = Collections.unmodifiableMap(bm);
+
         Map<Integer, ToolUpgrade> tm = new HashMap<>();
         toolUpgrades.forEach(u -> tm.put(u.level(), u));
         toolByLevel = Collections.unmodifiableMap(tm);
+
         Map<Integer, EnergyUpgrade> em = new HashMap<>();
         energyUpgrades.forEach(u -> em.put(u.level(), u));
         energyByLevel = Collections.unmodifiableMap(em);
+
         Map<String, DroneConfig> dm = new LinkedHashMap<>();
         droneConfigs.forEach(d -> dm.put(d.key(), d));
         droneByKey = Collections.unmodifiableMap(dm);
+
+        Map<Integer, SecurityUpgrade> sm = new HashMap<>();
+        securityUpgrades.forEach(u -> sm.put(u.level(), u));
+        securityByLevel = Collections.unmodifiableMap(sm);
+
+        Map<Integer, TrapUpgrade> trm = new HashMap<>();
+        trapUpgrades.forEach(u -> trm.put(u.level(), u));
+        trapByLevel = Collections.unmodifiableMap(trm);
     }
+
     // ── Worlds ──
     public String getHubWorldName() { return cfg.getString("hub-world", "world"); }
     public World getHubWorld() { return plugin.getServer().getWorld(getHubWorldName()); }
@@ -604,31 +767,90 @@ public class PluginConfig {
     public String getPlayerWorldPrefix() { return cfg.getString("player-world-prefix", "ctb_"); }
     public String getPlayerWorldName(UUID uuid) { return getPlayerWorldPrefix() + uuid.toString(); }
     public World getPlayerWorld(UUID uuid) { return plugin.getServer().getWorld(getPlayerWorldName(uuid)); }
+
+    // ── Spawn (hub) ──
+    public Location getHubSpawnLocation() {
+        World hub = getHubWorld();
+        if (hub == null) return null;
+        ConfigurationSection sec = cfg.getConfigurationSection("hub-spawn");
+        if (sec == null) return hub.getSpawnLocation();
+        double x = sec.getDouble("x", hub.getSpawnLocation().getX());
+        double y = sec.getDouble("y", hub.getSpawnLocation().getY());
+        double z = sec.getDouble("z", hub.getSpawnLocation().getZ());
+        float yaw = (float) sec.getDouble("yaw", 0);
+        float pitch = (float) sec.getDouble("pitch", 0);
+        return new Location(hub, x, y, z, yaw, pitch);
+    }
+
+    public void setHubSpawn(Location loc) {
+        cfg.set("hub-spawn.x", loc.getX());
+        cfg.set("hub-spawn.y", loc.getY());
+        cfg.set("hub-spawn.z", loc.getZ());
+        cfg.set("hub-spawn.yaw", loc.getYaw());
+        cfg.set("hub-spawn.pitch", loc.getPitch());
+        plugin.saveConfig();
+    }
+
+    public Location getPlayerWorldSpawn(World playerWorld) {
+        if (playerWorld == null) return null;
+        ConfigurationSection sec = cfg.getConfigurationSection("player-world-spawn");
+        if (sec == null) return playerWorld.getSpawnLocation();
+        double x = sec.getDouble("x", playerWorld.getSpawnLocation().getX());
+        double y = sec.getDouble("y", playerWorld.getSpawnLocation().getY());
+        double z = sec.getDouble("z", playerWorld.getSpawnLocation().getZ());
+        float yaw = (float) sec.getDouble("yaw", 0);
+        float pitch = (float) sec.getDouble("pitch", 0);
+        return new Location(playerWorld, x, y, z, yaw, pitch);
+    }
+
+    public void setPlayerWorldSpawn(Location loc) {
+        cfg.set("player-world-spawn.x", loc.getX());
+        cfg.set("player-world-spawn.y", loc.getY());
+        cfg.set("player-world-spawn.z", loc.getZ());
+        cfg.set("player-world-spawn.yaw", loc.getYaw());
+        cfg.set("player-world-spawn.pitch", loc.getPitch());
+        plugin.saveConfig();
+    }
+
     // ── Zones ──
     public Location getSellZoneCenter(World w) {
         return new Location(w, cfg.getDouble("sell-zone.x"), cfg.getDouble("sell-zone.y"), cfg.getDouble("sell-zone.z"));
     }
     public double getSellZoneRadius() { return cfg.getDouble("sell-zone.radius", 3.0); }
+
     public Location getGarageLocation(World w) {
         return new Location(w, cfg.getDouble("garage.x"), cfg.getDouble("garage.y"), cfg.getDouble("garage.z"));
     }
     public double getGarageRadius() { return cfg.getDouble("garage.radius", 2.5); }
+
     public Location getVendingMachineLocation(World w) {
         return new Location(w, cfg.getDouble("vending-machine.x"), cfg.getDouble("vending-machine.y"), cfg.getDouble("vending-machine.z"));
     }
     public double getVendingMachineRadius() { return cfg.getDouble("vending-machine.radius", 2.5); }
+
     public Location getDroneShopLocation(World w) {
         return new Location(w, cfg.getDouble("drone-shop.x"), cfg.getDouble("drone-shop.y"), cfg.getDouble("drone-shop.z"));
     }
     public double getDroneShopRadius() { return cfg.getDouble("drone-shop.radius", 2.5); }
+
     public Location getQuestBoardLocation(World w) {
         return new Location(w, cfg.getDouble("quest-board.x", 4), cfg.getDouble("quest-board.y", -60), cfg.getDouble("quest-board.z", -11));
     }
     public double getQuestBoardRadius() { return cfg.getDouble("quest-board.radius", 2.5); }
+
     public Location getPrestigeAltarLocation(World w) {
         return new Location(w, cfg.getDouble("prestige-altar.x", 0), cfg.getDouble("prestige-altar.y", -60), cfg.getDouble("prestige-altar.z", -15));
     }
     public double getPrestigeAltarRadius() { return cfg.getDouble("prestige-altar.radius", 2.5); }
+
+    public Location getStashLocation(World w) {
+        return new Location(w,
+                cfg.getDouble("stash.x", 8),
+                cfg.getDouble("stash.y", -60),
+                cfg.getDouble("stash.z", -6));
+    }
+    public double getStashRadius() { return cfg.getDouble("stash.radius", 2.5); }
+
     // ── Gameplay ──
     public double getBoxSellPrice() { return cfg.getDouble("box-sell-price", 5.0); }
     public double getGlobalSellMultiplier() { return cfg.getDouble("global-sell-multiplier", 1.0); }
@@ -648,13 +870,16 @@ public class PluginConfig {
     public String getBoxBlock() { return cfg.getString("box-block", "NOTE_BLOCK"); }
     public double getMaxBreakDistance() { return cfg.getDouble("max-break-distance", 5.0); }
     public double getEnergyCostPerBox() { return cfg.getDouble("energy-cost-per-box", 10.0); }
+
     // ── Prestige ──
     public long getPrestigeRequiredEarned() { return cfg.getLong("prestige.required-total-earned", 500_000L); }
     public double getPrestigeBonusPerLevel() { return cfg.getDouble("prestige.bonus-per-level", 0.10); }
     public int getPrestigeMaxLevel() { return cfg.getInt("prestige.max-level", 50); }
+
     // ── Auto-save ──
     public int getAutoSaveIntervalSeconds() { return cfg.getInt("auto-save-interval-seconds", 300); }
-    // ── Records ──
+
+    // ── Records (PUBLIC pour accès cross-package) ──
     public record BagUpgrade(int level, int capacity, long cost) {}
     public record ToolUpgrade(int level, long cooldownMs, int boxesPerCollection, double extraBoxChance, long cost) {}
     public record EnergyUpgrade(int level, int maxEnergy, double regenPerSec, long cost) {}
@@ -666,15 +891,24 @@ public class PluginConfig {
             int maxSpeedTier, int maxRangeTier, int maxIncomeTier
     ) {}
     public record VendingItem(String key, String name, int energyRestore, long cost) {}
+    public record SecurityUpgrade(int level, String name, double detectionChance, long cost) {}
+    public record TrapUpgrade(int level, String name, double killChance, long cost) {}
+
     public List<BagUpgrade> getBagUpgrades() { return bagUpgrades; }
     public List<ToolUpgrade> getToolUpgrades() { return toolUpgrades; }
     public List<EnergyUpgrade> getEnergyUpgrades() { return energyUpgrades; }
     public List<DroneConfig> getDroneConfigs() { return droneConfigs; }
     public List<VendingItem> getVendingItems() { return vendingItems; }
+    public List<SecurityUpgrade> getSecurityUpgrades() { return securityUpgrades; }
+    public List<TrapUpgrade> getTrapUpgrades() { return trapUpgrades; }
+
     public BagUpgrade getBagUpgrade(int level) { return bagByLevel.get(level); }
     public ToolUpgrade getToolUpgrade(int level) { return toolByLevel.get(level); }
     public EnergyUpgrade getEnergyUpgrade(int level) { return energyByLevel.get(level); }
     public DroneConfig getDroneConfig(String key) { return droneByKey.get(key); }
+    public SecurityUpgrade getSecurityUpgrade(int level) { return securityByLevel.get(level); }
+    public TrapUpgrade getTrapUpgrade(int level) { return trapByLevel.get(level); }
+
     private List<BagUpgrade> loadBagUpgrades() {
         List<BagUpgrade> list = new ArrayList<>();
         List<?> raw = cfg.getList("bag-upgrades");
@@ -690,6 +924,7 @@ public class PluginConfig {
         }
         return list;
     }
+
     private List<ToolUpgrade> loadToolUpgrades() {
         List<ToolUpgrade> list = new ArrayList<>();
         List<?> raw = cfg.getList("tool-upgrades");
@@ -707,6 +942,62 @@ public class PluginConfig {
         }
         return list;
     }
+
+    // ── Box Rain Region ──
+    public BoundingBox getBoxRainRegion() {
+        double minX = cfg.getDouble("box-rain-region.min.x", -18);
+        double minY = cfg.getDouble("box-rain-region.min.y", -61);
+        double minZ = cfg.getDouble("box-rain-region.min.z", 3);
+        double maxX = cfg.getDouble("box-rain-region.max.x", 18);
+        double maxY = cfg.getDouble("box-rain-region.max.y", -40);
+        double maxZ = cfg.getDouble("box-rain-region.max.z", 24);
+        return new BoundingBox(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    public int getBoxRainBoxesPerIteration() {
+        return cfg.getInt("box-rain-region.boxes-per-iteration-per-player", 4);
+    }
+
+    public int getBoxRainIterations() {
+        return cfg.getInt("box-rain-region.iterations", 30);
+    }
+
+    public long getBoxRainIntervalTicks() {
+        return cfg.getLong("box-rain-region.interval-ticks", 20L);
+    }
+
+    public BoundingBox getPrestigeResetRegion() {
+        double minX = cfg.getDouble("prestige-reset-region.min.x", -18);
+        double minY = cfg.getDouble("prestige-reset-region.min.y", -61);
+        double minZ = cfg.getDouble("prestige-reset-region.min.z", 3);
+        double maxX = cfg.getDouble("prestige-reset-region.max.x", 18);
+        double maxY = cfg.getDouble("prestige-reset-region.max.y", -40);
+        double maxZ = cfg.getDouble("prestige-reset-region.max.z", 24);
+        return new BoundingBox(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
+    // ── Rats / Stash ──
+    public boolean isRatsEnabled() { return cfg.getBoolean("rats.enabled", true); }
+    public int getRatsMinSpawnSec() { return cfg.getInt("rats.spawn-min-sec", 180); }
+    public int getRatsMaxSpawnSec() { return cfg.getInt("rats.spawn-max-sec", 480); }
+    public double getRatsStealPercentMin() { return cfg.getDouble("rats.steal-percent-min", 0.01); }
+    public double getRatsStealPercentMax() { return cfg.getDouble("rats.steal-percent-max", 0.05); }
+    public long getRatsStealCap() { return cfg.getLong("rats.steal-cap", 5000L); }
+    public int getRatsTimeToStealSec() { return cfg.getInt("rats.time-to-steal-sec", 20); }
+    public double getRatsSpeed() { return cfg.getDouble("rats.speed", 0.3); }
+    public long getRatsMinBalanceToTrigger() { return cfg.getLong("rats.min-balance-to-trigger", 200L); }
+    public double getRatsSpawnRadius() { return cfg.getDouble("rats.spawn-radius", 6.0); }
+
+    public BoundingBox getStashRegion() {
+        double minX = cfg.getDouble("stash-region.min.x", 6);
+        double minY = cfg.getDouble("stash-region.min.y", -61);
+        double minZ = cfg.getDouble("stash-region.min.z", -8);
+        double maxX = cfg.getDouble("stash-region.max.x", 10);
+        double maxY = cfg.getDouble("stash-region.max.y", -55);
+        double maxZ = cfg.getDouble("stash-region.max.z", -4);
+        return new BoundingBox(minX, minY, minZ, maxX, maxY, maxZ);
+    }
+
     private List<EnergyUpgrade> loadEnergyUpgrades() {
         List<EnergyUpgrade> list = new ArrayList<>();
         List<?> raw = cfg.getList("energy-upgrades");
@@ -723,6 +1014,7 @@ public class PluginConfig {
         }
         return list;
     }
+
     private List<DroneConfig> loadDroneConfigs() {
         List<DroneConfig> list = new ArrayList<>();
         ConfigurationSection section = cfg.getConfigurationSection("drone-types");
@@ -748,6 +1040,7 @@ public class PluginConfig {
         }
         return list;
     }
+
     private List<VendingItem> loadVendingItems() {
         List<VendingItem> list = new ArrayList<>();
         ConfigurationSection section = cfg.getConfigurationSection("vending-machine-items");
@@ -764,17 +1057,55 @@ public class PluginConfig {
         }
         return list;
     }
+
+    private List<SecurityUpgrade> loadSecurityUpgrades() {
+        List<SecurityUpgrade> list = new ArrayList<>();
+        List<?> raw = cfg.getList("security-upgrades");
+        if (raw == null) return list;
+        for (Object obj : raw) {
+            if (obj instanceof Map<?, ?> map) {
+                list.add(new SecurityUpgrade(
+                        toInt(map.get("level"), 1),
+                        toStr(map.get("name"), "Caméra"),
+                        toDouble(map.get("detection-chance"), 0.0),
+                        toLong(map.get("cost"), 0)
+                ));
+            }
+        }
+        return list;
+    }
+
+    private List<TrapUpgrade> loadTrapUpgrades() {
+        List<TrapUpgrade> list = new ArrayList<>();
+        List<?> raw = cfg.getList("trap-upgrades");
+        if (raw == null) return list;
+        for (Object obj : raw) {
+            if (obj instanceof Map<?, ?> map) {
+                list.add(new TrapUpgrade(
+                        toInt(map.get("level"), 1),
+                        toStr(map.get("name"), "Piège"),
+                        toDouble(map.get("kill-chance"), 0.0),
+                        toLong(map.get("cost"), 0)
+                ));
+            }
+        }
+        return list;
+    }
+
     public long getDroneUpgradeCost(long droneCost, String upgradeType, int currentTier) {
         double base = cfg.getDouble("drone-upgrade.base-multiplier." + upgradeType, 0.4);
         double growth = cfg.getDouble("drone-upgrade.growth-per-tier", 1.75);
         return Math.round(droneCost * base * Math.pow(growth, currentTier));
     }
+
     public double getDroneSpeedTierBonus() { return cfg.getDouble("drone-upgrade.speed-bonus-per-tier", 0.20); }
     public double getDroneRangeTierBonus() { return cfg.getDouble("drone-upgrade.range-bonus-per-tier", 0.25); }
     public double getDroneIncomeTierBonus() { return cfg.getDouble("drone-upgrade.income-bonus-per-tier", 0.30); }
+
     private int toInt(Object o, int def) { return o instanceof Number n ? n.intValue() : def; }
     private long toLong(Object o, long def) { return o instanceof Number n ? n.longValue() : def; }
     private double toDouble(Object o, double d) { return o instanceof Number n ? n.doubleValue() : d; }
+    private String toStr(Object o, String def) { return o == null ? def : o.toString(); }
 }
 package fr.cleanthebackyard.cleanTheBackyard.data;
 public class DailyQuest {
@@ -817,7 +1148,9 @@ public class DailyQuest {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.data;
+
 import java.util.*;
+
 public class PlayerData {
     private final UUID uuid;
     private final String name;
@@ -830,9 +1163,9 @@ public class PlayerData {
     private long lastBreakTime;
     private int energyLevel;
     private double currentEnergy;
-    private final Set<String> ownedDrones;
-    private final Map<String, int[]> droneUpgrades;
-    private final Map<String, long[]> droneStats;
+    private final Set<String> ownedDrones = new HashSet<>();
+    private final Map<String, int[]> droneUpgrades = new HashMap<>();
+    private final Map<String, long[]> droneStats = new HashMap<>();
     private long sessionBoxesBroken;
     private long sessionEarned;
     private long unlimitedEnergyUntil = 0L;
@@ -840,19 +1173,26 @@ public class PlayerData {
     private long blackMarketUntil = 0L;
     private int prestigeLevel = 0;
     private long lifetimeEarned = 0L;
+
+    // Sécurité contre les rats
+    private int securityLevel = 0;   // 0 = pas de caméra
+    private int trapLevel = 0;       // 0 = pas de piège
+    private long totalStolenByRats = 0L;
+    private long totalRatsKilled = 0L;
+    private long totalRatsScared = 0L;
+
+    // Quêtes
     private long questResetTimestamp = 0L;
     private final List<DailyQuest> dailyQuests = new ArrayList<>();
+
     public PlayerData(UUID uuid, String name) {
         this.uuid = uuid;
         this.name = name;
-        this.balance = 0.0;
+        this.balance = 0;
         this.bagLevel = 1;
         this.toolLevel = 1;
         this.energyLevel = 1;
-        this.currentEnergy = 100.0;
-        this.ownedDrones = new HashSet<>();
-        this.droneUpgrades = new HashMap<>();
-        this.droneStats = new HashMap<>();
+        this.currentEnergy = 100;
     }
 
     public UUID getUuid() { return uuid; }
@@ -861,9 +1201,9 @@ public class PlayerData {
     public void setBalance(double v) { this.balance = Math.max(0, v); }
     public void addBalance(double v) {
         this.balance += v;
-        totalEarned += (long) v;
-        sessionEarned += (long) v;
-        lifetimeEarned += (long) v;
+        this.totalEarned += (long) v;
+        this.sessionEarned += (long) v;
+        this.lifetimeEarned += (long) v;
     }
     public boolean removeBalance(double v) {
         if (balance < v) return false;
@@ -871,19 +1211,20 @@ public class PlayerData {
         return true;
     }
     public long getTotalEarned() { return totalEarned; }
+    public void setTotalEarned(long v) { this.totalEarned = v; }
     public long getLifetimeEarned() { return lifetimeEarned; }
     public void setLifetimeEarned(long v) { this.lifetimeEarned = v; }
     public long getTotalBoxesBroken() { return totalBoxesBroken; }
     public void setTotalBoxesBroken(long v) { this.totalBoxesBroken = v; }
     public void incrementBoxesBroken() { totalBoxesBroken++; sessionBoxesBroken++; }
     public int getBagLevel() { return bagLevel; }
-    public void setBagLevel(int lvl) { this.bagLevel = lvl; }
+    public void setBagLevel(int v) { this.bagLevel = v; }
     public int getCurrentBoxes() { return currentBoxes; }
     public void setCurrentBoxes(int v) { this.currentBoxes = v; }
     public void addBox() { this.currentBoxes++; }
     public void clearBag() { this.currentBoxes = 0; }
     public int getToolLevel() { return toolLevel; }
-    public void setToolLevel(int lvl) { this.toolLevel = lvl; }
+    public void setToolLevel(int v) { this.toolLevel = v; }
     public long getLastBreakTime() { return lastBreakTime; }
     public void setLastBreakTime(long t) { this.lastBreakTime = t; }
     public int getEnergyLevel() { return energyLevel; }
@@ -902,7 +1243,9 @@ public class PlayerData {
     public int[] getDroneUpgrades(String key) {
         return droneUpgrades.computeIfAbsent(key, k -> new int[]{0, 0, 0});
     }
-    public void setDroneUpgrades(String key, int[] tiers) { droneUpgrades.put(key, tiers); }
+    public void setDroneUpgrades(String key, int[] tiers) {
+        droneUpgrades.put(key, tiers);
+    }
     public Map<String, int[]> getAllDroneUpgrades() { return droneUpgrades; }
     public long[] getDroneStats(String key) {
         return droneStats.computeIfAbsent(key, k -> new long[]{0L, 0L});
@@ -956,9 +1299,20 @@ public class PlayerData {
         this.dailyQuests.addAll(quests);
     }
 
-    // Dans PlayerData.java
-    public void setTotalEarned(long v) { this.totalEarned = v; }
-
+    // ── Sécurité contre les rats ──
+    public int getSecurityLevel() { return securityLevel; }
+    public void setSecurityLevel(int v) { this.securityLevel = Math.max(0, v); }
+    public int getTrapLevel() { return trapLevel; }
+    public void setTrapLevel(int v) { this.trapLevel = Math.max(0, v); }
+    public long getTotalStolenByRats() { return totalStolenByRats; }
+    public void addStolenByRats(long v) { this.totalStolenByRats += v; }
+    public void setTotalStolenByRats(long v) { this.totalStolenByRats = v; }
+    public long getTotalRatsKilled() { return totalRatsKilled; }
+    public void incrementRatsKilled() { this.totalRatsKilled++; }
+    public void setTotalRatsKilled(long v) { this.totalRatsKilled = v; }
+    public long getTotalRatsScared() { return totalRatsScared; }
+    public void incrementRatsScared() { this.totalRatsScared++; }
+    public void setTotalRatsScared(long v) { this.totalRatsScared = v; }
 }
 package fr.cleanthebackyard.cleanTheBackyard.entity;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
@@ -1227,6 +1581,263 @@ public class DroneEntity {
         releaseLock();
     }
 }
+package fr.cleanthebackyard.cleanTheBackyard.entity;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
+import org.bukkit.Location;
+import org.bukkit.Particle;
+import org.bukkit.Sound;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Rabbit;
+import org.bukkit.entity.Player;
+import org.bukkit.util.Vector;
+
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+
+public class RatEntity {
+
+    private final CleanTheBackyard plugin;
+    private final Player owner;
+    private final World world;
+    private final Rabbit entity;
+    private final Location stashLoc;
+    private final long stealAmount;
+    private final UUID id;
+
+    private enum State { APPROACHING, STEALING, ESCAPING }
+    private State state = State.APPROACHING;
+
+    private org.bukkit.scheduler.BukkitRunnable task;
+    private long startTime;
+    private boolean detected = false;
+
+    public RatEntity(Player owner, Location stashLoc, long stealAmount) {
+        this.plugin = CleanTheBackyard.getInstance();
+        this.owner = owner;
+        this.world = owner.getWorld();
+        this.stashLoc = stashLoc;
+        this.stealAmount = stealAmount;
+        this.id = UUID.randomUUID();
+
+        PluginConfig cfg = plugin.getPluginConfig();
+        double radius = cfg.getRatsSpawnRadius();
+
+        Location spawnLoc = findSafeSpawnLocation(stashLoc, radius);
+
+        this.entity = (Rabbit) world.spawnEntity(spawnLoc, EntityType.RABBIT);
+        this.entity.setRabbitType(Rabbit.Type.BLACK);
+        this.entity.setAdult();
+        this.entity.setCustomNameVisible(true);
+        this.entity.setCustomName(ChatUtil.color("&8🐀 Rat voleur"));
+        this.entity.setRemoveWhenFarAway(false);
+        this.entity.setAware(false);
+        this.entity.setInvulnerable(false);
+
+        this.startTime = System.currentTimeMillis();
+        startTask();
+        rollDetection();
+    }
+
+    private Location findSafeSpawnLocation(Location center, double radius) {
+        for (int attempts = 0; attempts < 10; attempts++) {
+            double angle = ThreadLocalRandom.current().nextDouble(0, Math.PI * 2);
+            double dist = radius * 0.5 + ThreadLocalRandom.current().nextDouble() * (radius * 0.5);
+            double x = center.getX() + Math.cos(angle) * dist;
+            double z = center.getZ() + Math.sin(angle) * dist;
+
+            int bx = (int) Math.floor(x);
+            int bz = (int) Math.floor(z);
+
+            int topY = world.getHighestBlockYAt(bx, bz);
+            int spawnY = topY + 1;
+
+            Block feet = world.getBlockAt(bx, spawnY, bz);
+            Block head = world.getBlockAt(bx, spawnY + 1, bz);
+
+            if (feet.getType().isAir() && head.getType().isAir()) {
+                return new Location(world, bx + 0.5, spawnY, bz + 0.5);
+            }
+        }
+        int bx = stashLoc.getBlockX();
+        int bz = stashLoc.getBlockZ();
+        int spawnY = world.getHighestBlockYAt(bx, bz) + 1;
+        return new Location(world, bx + 0.5, spawnY, bz + 0.5);
+    }
+
+    public UUID getId() { return id; }
+    public Player getOwner() { return owner; }
+    public long getStealAmount() { return stealAmount; }
+    public boolean isDetected() { return detected; }
+
+    private void rollDetection() {
+        PlayerData data = plugin.getPlayerDataManager().get(owner);
+        if (data == null) return;
+        int level = data.getSecurityLevel();
+        if (level <= 0) return;
+        PluginConfig.SecurityUpgrade up = plugin.getPluginConfig().getSecurityUpgrade(level);
+        if (up == null) return;
+        if (ThreadLocalRandom.current().nextDouble() < up.detectionChance()) {
+            detected = true;
+            if (owner.isOnline()) {
+                owner.sendMessage(ChatUtil.color("&c[Caméra] &fUn rat tente de te voler de l'argent !"));
+                owner.playSound(owner.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 0.5f);
+            }
+        }
+    }
+
+    private void rollTrap() {
+        PlayerData data = plugin.getPlayerDataManager().get(owner);
+        if (data == null) return;
+        int level = data.getTrapLevel();
+        if (level <= 0) return;
+        PluginConfig.TrapUpgrade up = plugin.getPluginConfig().getTrapUpgrade(level);
+        if (up == null) return;
+        if (ThreadLocalRandom.current().nextDouble() < up.killChance()) {
+            if (owner.isOnline()) {
+                owner.sendMessage(ChatUtil.color("&a[Piège] &fUn rat a été éliminé !"));
+                owner.playSound(owner.getLocation(), Sound.BLOCK_TRIPWIRE_CLICK_ON, 1.0f, 1.5f);
+            }
+            data.incrementRatsKilled();
+            killByTrap();
+        }
+    }
+
+    private void startTask() {
+        task = new org.bukkit.scheduler.BukkitRunnable() {
+            @Override
+            public void run() {
+                if (entity.isDead() || !entity.isValid()) {
+                    stop(false);
+                    return;
+                }
+                if (!owner.isOnline() || !owner.getWorld().equals(world)) {
+                    stop(false);
+                    return;
+                }
+                switch (state) {
+                    case APPROACHING -> approachStash();
+                    case STEALING -> doSteal();
+                    case ESCAPING -> escape();
+                }
+            }
+        };
+        task.runTaskTimer(plugin, 2L, 4L);
+        plugin.getServer().getScheduler().runTaskLater(plugin, this::rollTrap, 20L);
+    }
+
+    private void approachStash() {
+        Location current = entity.getLocation();
+        double dist = current.distance(stashLoc);
+        if (dist < 1.8) {
+            state = State.STEALING;
+            startTime = System.currentTimeMillis();
+            world.spawnParticle(Particle.SMOKE, stashLoc, 10, 0.3, 0.3, 0.3, 0.02);
+            return;
+        }
+        moveTowards(stashLoc);
+    }
+
+    private void doSteal() {
+        long elapsed = System.currentTimeMillis() - startTime;
+        long required = plugin.getPluginConfig().getRatsTimeToStealSec() * 1000L;
+        world.spawnParticle(Particle.ANGRY_VILLAGER, entity.getLocation().add(0, 0.5, 0), 1);
+        if (elapsed >= required) {
+            PlayerData data = plugin.getPlayerDataManager().get(owner);
+            if (data != null) {
+                long actual = Math.min(stealAmount, (long) data.getBalance());
+                if (actual > 0) {
+                    data.removeBalance(actual);
+                    data.addStolenByRats(actual);
+                    if (owner.isOnline()) {
+                        owner.sendMessage(ChatUtil.color(
+                                "&c[VOL] &fUn rat t'a volé &c" + NumberFormatUtil.money(actual) + " &f!"));
+                        owner.playSound(owner.getLocation(), Sound.ENTITY_ITEM_BREAK, 0.8f, 0.7f);
+                    }
+                }
+            }
+            state = State.ESCAPING;
+            startTime = System.currentTimeMillis();
+        }
+    }
+
+    private void escape() {
+        Location current = entity.getLocation();
+        Vector away = current.toVector().subtract(stashLoc.toVector()).normalize();
+        if (away.lengthSquared() < 0.01) {
+            away = new Vector(1, 0, 0);
+        }
+        Location target = current.clone().add(away.multiply(15));
+        moveTowards(target);
+        if (current.distance(stashLoc) > 20 || System.currentTimeMillis() - startTime > 15_000) {
+            stop(false);
+        }
+    }
+
+    private void moveTowards(Location target) {
+        Location current = entity.getLocation();
+        Vector direction = target.toVector().subtract(current.toVector());
+        direction.setY(0);
+        if (direction.lengthSquared() < 0.001) return;
+        direction.normalize().multiply(plugin.getPluginConfig().getRatsSpeed());
+
+        Location newLoc = current.clone().add(direction);
+        int bx = newLoc.getBlockX();
+        int bz = newLoc.getBlockZ();
+        int topY = world.getHighestBlockYAt(bx, bz);
+        int safeY = topY + 1;
+
+        Block feet = world.getBlockAt(bx, safeY, bz);
+        Block head = world.getBlockAt(bx, safeY + 1, bz);
+        if (!feet.getType().isAir() || !head.getType().isAir()) {
+            return;
+        }
+
+        newLoc.setY(safeY);
+        float yaw = (float) Math.toDegrees(Math.atan2(-direction.getX(), direction.getZ()));
+        newLoc.setYaw(yaw);
+        entity.teleport(newLoc);
+    }
+
+    public void killByTrap() {
+        if (entity.isValid()) {
+            world.spawnParticle(Particle.CRIT, entity.getLocation(), 15, 0.3, 0.3, 0.3, 0.1);
+            world.playSound(entity.getLocation(), Sound.ENTITY_RABBIT_DEATH, 1.0f, 0.5f);
+        }
+        stop(true);
+    }
+
+    public void killByPlayer() {
+        PlayerData data = plugin.getPlayerDataManager().get(owner);
+        if (data != null) {
+            if (state == State.STEALING || state == State.APPROACHING) {
+                data.incrementRatsScared();
+            } else {
+                data.incrementRatsKilled();
+            }
+        }
+        if (entity.isValid()) {
+            world.spawnParticle(Particle.CRIT, entity.getLocation(), 15, 0.3, 0.3, 0.3, 0.1);
+            world.playSound(entity.getLocation(), Sound.ENTITY_RABBIT_DEATH, 1.0f, 0.5f);
+        }
+        if (owner.isOnline()) {
+            owner.sendMessage(ChatUtil.color("&aTu as éliminé un rat voleur !"));
+        }
+        stop(true);
+    }
+
+    public void stop(boolean killed) {
+        if (task != null && !task.isCancelled()) task.cancel();
+        if (entity != null && entity.isValid()) entity.remove();
+        plugin.getRatManager().unregister(this);
+    }
+}
 package fr.cleanthebackyard.cleanTheBackyard.event;
 
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
@@ -1287,44 +1898,14 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.FallingBlock;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.util.Vector;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 
 public class BoxRainEvent {
-
-    private static final Set<Material> INVALID_GROUNDS = EnumSet.of(
-            Material.OAK_LEAVES, Material.SPRUCE_LEAVES, Material.BIRCH_LEAVES,
-            Material.JUNGLE_LEAVES, Material.ACACIA_LEAVES, Material.DARK_OAK_LEAVES,
-            Material.MANGROVE_LEAVES, Material.CHERRY_LEAVES, Material.AZALEA_LEAVES,
-            Material.FLOWERING_AZALEA_LEAVES, Material.PALE_OAK_LEAVES,
-            Material.OAK_FENCE, Material.SPRUCE_FENCE, Material.BIRCH_FENCE,
-            Material.JUNGLE_FENCE, Material.ACACIA_FENCE, Material.DARK_OAK_FENCE,
-            Material.MANGROVE_FENCE, Material.CHERRY_FENCE, Material.PALE_OAK_FENCE,
-            Material.NETHER_BRICK_FENCE, Material.IRON_BARS,
-            Material.GLASS, Material.GLASS_PANE,
-            Material.WATER, Material.LAVA, Material.BUBBLE_COLUMN,
-            Material.NOTE_BLOCK,
-            Material.BRICKS, Material.BRICK_STAIRS, Material.BRICK_SLAB, Material.BRICK_WALL,
-            Material.STONE_BRICKS, Material.STONE_BRICK_STAIRS, Material.STONE_BRICK_SLAB, Material.STONE_BRICK_WALL,
-            Material.MOSSY_STONE_BRICKS, Material.MOSSY_STONE_BRICK_STAIRS, Material.MOSSY_STONE_BRICK_SLAB, Material.MOSSY_STONE_BRICK_WALL,
-            Material.CRACKED_STONE_BRICKS, Material.CHISELED_STONE_BRICKS,
-            Material.NETHER_BRICKS, Material.NETHER_BRICK_STAIRS, Material.NETHER_BRICK_SLAB, Material.NETHER_BRICK_WALL,
-            Material.RED_NETHER_BRICKS, Material.RED_NETHER_BRICK_STAIRS, Material.RED_NETHER_BRICK_SLAB, Material.RED_NETHER_BRICK_WALL,
-            Material.POLISHED_BLACKSTONE_BRICKS, Material.POLISHED_BLACKSTONE_BRICK_STAIRS,
-            Material.POLISHED_BLACKSTONE_BRICK_SLAB, Material.POLISHED_BLACKSTONE_BRICK_WALL,
-            Material.CRACKED_POLISHED_BLACKSTONE_BRICKS, Material.CHISELED_POLISHED_BLACKSTONE,
-            Material.MUD_BRICKS, Material.MUD_BRICK_STAIRS, Material.MUD_BRICK_SLAB, Material.MUD_BRICK_WALL,
-            Material.STRIPPED_OAK_LOG, Material.STRIPPED_SPRUCE_LOG, Material.STRIPPED_BIRCH_LOG,
-            Material.STRIPPED_JUNGLE_LOG, Material.STRIPPED_ACACIA_LOG, Material.STRIPPED_DARK_OAK_LOG,
-            Material.STRIPPED_MANGROVE_LOG, Material.STRIPPED_CHERRY_LOG, Material.STRIPPED_PALE_OAK_LOG,
-            Material.STRIPPED_OAK_WOOD, Material.STRIPPED_SPRUCE_WOOD, Material.STRIPPED_BIRCH_WOOD,
-            Material.STRIPPED_JUNGLE_WOOD, Material.STRIPPED_ACACIA_WOOD, Material.STRIPPED_DARK_OAK_WOOD,
-            Material.STRIPPED_MANGROVE_WOOD, Material.STRIPPED_CHERRY_WOOD, Material.STRIPPED_PALE_OAK_WOOD,
-            Material.POLISHED_DIORITE, Material.POLISHED_DIORITE_STAIRS, Material.POLISHED_DIORITE_SLAB,
-            Material.BEEHIVE, Material.BEE_NEST,
-            Material.BARRIER, Material.BEDROCK, Material.SMOOTH_STONE
-    );
 
     private final CleanTheBackyard plugin;
     private final Random random = new Random();
@@ -1350,13 +1931,24 @@ public class BoxRainEvent {
 
         Material boxMat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
         if (boxMat == null) boxMat = Material.NOTE_BLOCK;
+        final Material finalBoxMat = boxMat;
         final BlockData fallingData = Bukkit.createBlockData(boxMat);
+
+        final BoundingBox region = plugin.getPluginConfig().getBoxRainRegion();
+        final int boxesPerIteration = plugin.getPluginConfig().getBoxRainBoxesPerIteration();
+        final int maxIterations = plugin.getPluginConfig().getBoxRainIterations();
+        final long intervalTicks = plugin.getPluginConfig().getBoxRainIntervalTicks();
+
+        // Hauteur de spawn : 15 blocs au-dessus du max Y de la région
+        final double spawnHeight = region.getMaxY() + 15;
 
         List<Player> participants = new ArrayList<>();
         for (Player p : targets) {
             if (!EventUtils.isInOwnWorld(plugin, p)) continue;
             participants.add(p);
-            p.sendMessage(ChatUtil.color("&3[PLUIE DE CARTONS] &fDes cartons tombent du ciel pendant 30 secondes autour de toi !"));
+            int durationSec = (int) (maxIterations * intervalTicks / 20);
+            p.sendMessage(ChatUtil.color("&3[PLUIE DE CARTONS] &fDes cartons tombent du ciel pendant "
+                    + durationSec + " secondes !"));
             p.playSound(p.getLocation(), Sound.WEATHER_RAIN, 1.0f, 1.0f);
         }
 
@@ -1367,13 +1959,10 @@ public class BoxRainEvent {
 
         new BukkitRunnable() {
             int iteration = 0;
-            final int MAX_ITERATIONS = 30;
-            final int BOXES_PER_ITERATION_PER_PLAYER = 4;
-            final int RADIUS = 12;
 
             @Override
             public void run() {
-                if (iteration >= MAX_ITERATIONS) {
+                if (iteration >= maxIterations) {
                     cancel();
                     return;
                 }
@@ -1382,63 +1971,76 @@ public class BoxRainEvent {
                 for (Player p : participants) {
                     if (!p.isOnline() || !EventUtils.isInOwnWorld(plugin, p)) continue;
                     World w = p.getWorld();
-                    Location center = p.getLocation();
 
                     int spawned = 0;
                     int attempts = 0;
-                    while (spawned < BOXES_PER_ITERATION_PER_PLAYER && attempts < 30) {
+                    while (spawned < boxesPerIteration && attempts < 30) {
                         attempts++;
-                        double angle = random.nextDouble() * Math.PI * 2;
-                        double dist = 3 + random.nextDouble() * RADIUS;
-                        int x = (int) Math.round(center.getX() + Math.cos(angle) * dist);
-                        int z = (int) Math.round(center.getZ() + Math.sin(angle) * dist);
+                        Location spawnLoc = randomSpawnLocation(w, region, spawnHeight);
+                        if (spawnLoc == null) continue;
 
-                        Location groundLoc = findGroundLocation(w, x, z, center.getBlockY());
-                        if (groundLoc == null) continue;
+                        // Vérifie qu'il y a bien de l'air à la position de spawn
+                        if (!spawnLoc.getBlock().getType().isAir()) continue;
 
-                        Location visualSpawn = groundLoc.clone().add(0.5, 12, 0.5);
-                        if (!visualSpawn.getBlock().getType().isAir()) continue;
+                        // Vérifie qu'il existe au moins un emplacement valide en dessous
+                        if (!hasValidLandingBelow(w, region, spawnLoc, finalBoxMat)) continue;
 
                         try {
-                            FallingBlock fb = w.spawnFallingBlock(visualSpawn, fallingData);
+                            FallingBlock fb = w.spawnFallingBlock(spawnLoc, fallingData);
                             fb.setDropItem(false);
                             fb.setHurtEntities(false);
                             fb.setVelocity(new Vector(0, -0.1, 0));
-                            w.playSound(groundLoc, Sound.ENTITY_CHICKEN_EGG, 0.3f, 1.5f);
-                            w.spawnParticle(Particle.CLOUD, visualSpawn, 5, 0.2, 0, 0.2, 0.01);
+                            // Marqueur pour le listener : c'est une "box rain"
+                            fb.getPersistentDataContainer().set(
+                                    new NamespacedKey(plugin, "box-rain"),
+                                    org.bukkit.persistence.PersistentDataType.BYTE,
+                                    (byte) 1
+                            );
+                            w.spawnParticle(Particle.CLOUD, spawnLoc, 5, 0.2, 0, 0.2, 0.01);
+                            spawned++;
                         } catch (Throwable ignored) {
-                            continue;
                         }
-                        spawned++;
                     }
                 }
             }
-        }.runTaskTimer(plugin, 0L, 20L);
+        }.runTaskTimer(plugin, 0L, intervalTicks);
 
         scheduleNext();
     }
 
-    private boolean isValidGround(Block block) {
-        Material mat = block.getType();
-        if (mat.isAir()) return false;
-        if (INVALID_GROUNDS.contains(mat)) return false;
-        return mat.isSolid();
+    /**
+     * Génère une position XZ aléatoire dans la région, à la hauteur de spawn fixe.
+     */
+    private Location randomSpawnLocation(World w, BoundingBox region, double spawnHeight) {
+        double rangeX = region.getMaxX() - region.getMinX();
+        double rangeZ = region.getMaxZ() - region.getMinZ();
+        if (rangeX <= 0 || rangeZ <= 0) return null;
+
+        double x = region.getMinX() + random.nextDouble() * rangeX;
+        double z = region.getMinZ() + random.nextDouble() * rangeZ;
+
+        int bx = (int) Math.floor(x);
+        int bz = (int) Math.floor(z);
+        return new Location(w, bx + 0.5, spawnHeight, bz + 0.5);
     }
 
-    private Location findGroundLocation(World w, int x, int z, int referenceY) {
-        int maxY = Math.min(w.getMaxHeight() - 1, referenceY + 30);
-        int minY = Math.max(w.getMinHeight() + 1, referenceY - 30);
+    /**
+     * Vérifie qu'il y a au moins un bloc d'air dans la région verticale en dessous
+     * du spawn (pour que le FallingBlock puisse se poser quelque part).
+     */
+    private boolean hasValidLandingBelow(World w, BoundingBox region, Location spawnLoc, Material boxMat) {
+        int x = spawnLoc.getBlockX();
+        int z = spawnLoc.getBlockZ();
+        int minY = (int) Math.floor(region.getMinY());
+        int maxY = (int) Math.floor(region.getMaxY());
 
         for (int y = maxY; y >= minY; y--) {
-            Block ground = w.getBlockAt(x, y, z);
-            if (isValidGround(ground)) {
-                Block above = w.getBlockAt(x, y + 1, z);
-                if (above.getType().isAir()) {
-                    return ground.getLocation();
-                }
+            Block b = w.getBlockAt(x, y, z);
+            if (b.getType().isAir() || b.getType() == boxMat) {
+                return true;
             }
         }
-        return null;
+        return false;
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.event;
@@ -1859,7 +2461,7 @@ import java.util.UUID;
 
 public class GuiManager {
 
-    public enum GuiType { UPGRADE, VENDING_MACHINE, DRONE_SHOP, QUEST, PRESTIGE }
+    public enum GuiType { UPGRADE, VENDING_MACHINE, DRONE_SHOP, QUEST, PRESTIGE, SECURITY }
 
     private final CleanTheBackyard plugin;
     private final Map<UUID, GuiType> openGuis = new HashMap<>();
@@ -1869,6 +2471,7 @@ public class GuiManager {
     private final ShopGui shopGui;
     private final QuestGui questGui;
     private final PrestigeGui prestigeGui;
+    private final SecurityGui securityGui;
 
     public GuiManager(CleanTheBackyard plugin) {
         this.plugin = plugin;
@@ -1877,6 +2480,7 @@ public class GuiManager {
         this.shopGui = new ShopGui(plugin);
         this.questGui = new QuestGui(plugin);
         this.prestigeGui = new PrestigeGui(plugin);
+        this.securityGui = new SecurityGui(plugin);
     }
 
     public void openUpgradeGui(Player player) {
@@ -1904,6 +2508,11 @@ public class GuiManager {
         prestigeGui.open(player);
     }
 
+    public void openSecurityGui(Player player) {
+        openGuis.put(player.getUniqueId(), GuiType.SECURITY);
+        securityGui.open(player);
+    }
+
     public boolean handleClick(Player player, InventoryClickEvent event) {
         GuiType type = openGuis.get(player.getUniqueId());
         if (type == null) return false;
@@ -1913,6 +2522,7 @@ public class GuiManager {
             case DRONE_SHOP -> shopGui.handleClick(player, event);
             case QUEST -> questGui.handleClick(player, event);
             case PRESTIGE -> prestigeGui.handleClick(player, event);
+            case SECURITY -> securityGui.handleClick(player, event);
         };
     }
 
@@ -2129,10 +2739,173 @@ package fr.cleanthebackyard.cleanTheBackyard.gui;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class SecurityGui {
+    private static final String TITLE = ChatUtil.color("&8[&6Sécurité du Coffre&8]");
+    private final CleanTheBackyard plugin;
+
+    public SecurityGui(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public void open(Player player) {
+        CtbHolder holder = new CtbHolder(GuiManager.GuiType.SECURITY);
+        Inventory inv = Bukkit.createInventory(holder, 45, TITLE);
+        holder.setInventory(inv);
+        build(inv, player);
+        player.openInventory(inv);
+    }
+
+    public void forceClear(Player player) { /* rien à nettoyer */ }
+
+    private void build(Inventory inv, Player player) {
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return;
+        ItemStack glass = new ItemBuilder(Material.GRAY_STAINED_GLASS_PANE).name(" ").build();
+        for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, glass);
+
+        inv.setItem(4, new ItemBuilder(Material.GOLD_BLOCK)
+                .name("&6💰 Ton argent")
+                .lore(List.of(
+                        ChatUtil.color("&7Solde actuel : &a" + NumberFormatUtil.money(data.getBalance())),
+                        ChatUtil.color("&cVolé par les rats : &c" + NumberFormatUtil.money(data.getTotalStolenByRats())),
+                        ChatUtil.color("&7Rats éliminés : &f" + data.getTotalRatsKilled()),
+                        ChatUtil.color("&7Rats effrayés : &f" + data.getTotalRatsScared()),
+                        " ",
+                        ChatUtil.color("&eAméliore tes défenses ci-dessous pour"),
+                        ChatUtil.color("&eprotéger ton argent des rats voleurs !")
+                ))
+                .build());
+
+        inv.setItem(20, buildSecurityIcon(data));
+        inv.setItem(24, buildTrapIcon(data));
+
+        inv.setItem(40, new ItemBuilder(Material.BOOK)
+                .name("&eComment ça marche ?")
+                .lore(List.of(
+                        ChatUtil.color("&7Des rats apparaissent périodiquement"),
+                        ChatUtil.color("&7et volent un % de ton argent."),
+                        " ",
+                        ChatUtil.color("&b📷 Caméras &7: chance de te prévenir"),
+                        ChatUtil.color("&c🪤 Pièges &7: chance d'éliminer le rat"),
+                        " ",
+                        ChatUtil.color("&aTu peux aussi frapper le rat à mains nues !")
+                ))
+                .build());
+    }
+
+    private ItemStack buildSecurityIcon(PlayerData data) {
+        int level = data.getSecurityLevel();
+        PluginConfig.SecurityUpgrade current = level > 0 ? plugin.getPluginConfig().getSecurityUpgrade(level) : null;
+        PluginConfig.SecurityUpgrade next = plugin.getPluginConfig().getSecurityUpgrade(level + 1);
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatUtil.color("&7Niveau actuel : &f" + level
+                + (current != null ? " (" + current.name() + ")" : " (Aucune)")));
+        if (current != null) {
+            lore.add(ChatUtil.color("&7Chance de détection : &b"
+                    + String.format("%.0f%%", current.detectionChance() * 100)));
+        }
+        lore.add(" ");
+        if (next != null) {
+            lore.add(ChatUtil.color("&eProchain : &f" + next.name()));
+            lore.add(ChatUtil.color("&eDétection : &b"
+                    + String.format("%.0f%%", next.detectionChance() * 100)));
+            lore.add(ChatUtil.color("&ePrix : &f" + NumberFormatUtil.money(next.cost())));
+            lore.add(" ");
+            lore.add(ChatUtil.color(data.getBalance() >= next.cost() ? "&aClic pour acheter" : "&cFonds insuffisants"));
+        } else {
+            lore.add(ChatUtil.color("&aNiveau maximum atteint"));
+        }
+        return new ItemBuilder(Material.SPYGLASS).name("&b📷 Caméra de surveillance").lore(lore).build();
+    }
+
+    private ItemStack buildTrapIcon(PlayerData data) {
+        int level = data.getTrapLevel();
+        PluginConfig.TrapUpgrade current = level > 0 ? plugin.getPluginConfig().getTrapUpgrade(level) : null;
+        PluginConfig.TrapUpgrade next = plugin.getPluginConfig().getTrapUpgrade(level + 1);
+        List<String> lore = new ArrayList<>();
+        lore.add(ChatUtil.color("&7Niveau actuel : &f" + level
+                + (current != null ? " (" + current.name() + ")" : " (Aucun)")));
+        if (current != null) {
+            lore.add(ChatUtil.color("&7Chance d'élimination : &a"
+                    + String.format("%.0f%%", current.killChance() * 100)));
+        }
+        lore.add(" ");
+        if (next != null) {
+            lore.add(ChatUtil.color("&eProchain : &f" + next.name()));
+            lore.add(ChatUtil.color("&eÉlimination : &a"
+                    + String.format("%.0f%%", next.killChance() * 100)));
+            lore.add(ChatUtil.color("&ePrix : &f" + NumberFormatUtil.money(next.cost())));
+            lore.add(" ");
+            lore.add(ChatUtil.color(data.getBalance() >= next.cost() ? "&aClic pour acheter" : "&cFonds insuffisants"));
+        } else {
+            lore.add(ChatUtil.color("&aNiveau maximum atteint"));
+        }
+        return new ItemBuilder(Material.TRIPWIRE_HOOK).name("&c🪤 Piège à rats").lore(lore).build();
+    }
+
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        event.setCancelled(true);
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return true;
+        int slot = event.getRawSlot();
+        switch (slot) {
+            case 20 -> upgradeSecurity(player, data);
+            case 24 -> upgradeTrap(player, data);
+            default -> { return true; }
+        }
+        build(event.getInventory(), player);
+        return true;
+    }
+
+    private void upgradeSecurity(Player player, PlayerData data) {
+        int level = data.getSecurityLevel();
+        PluginConfig.SecurityUpgrade next = plugin.getPluginConfig().getSecurityUpgrade(level + 1);
+        if (next == null) {
+            player.sendMessage(ChatUtil.color("&eNiveau maximum atteint."));
+            return;
+        }
+        if (!plugin.getEconomyManager().debit(player, next.cost(), next.name())) return;
+        data.setSecurityLevel(level + 1);
+        player.sendMessage(ChatUtil.color("&aCaméra améliorée : &f" + next.name()));
+        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
+    }
+
+    private void upgradeTrap(Player player, PlayerData data) {
+        int level = data.getTrapLevel();
+        PluginConfig.TrapUpgrade next = plugin.getPluginConfig().getTrapUpgrade(level + 1);
+        if (next == null) {
+            player.sendMessage(ChatUtil.color("&eNiveau maximum atteint."));
+            return;
+        }
+        if (!plugin.getEconomyManager().debit(player, next.cost(), next.name())) return;
+        data.setTrapLevel(level + 1);
+        player.sendMessage(ChatUtil.color("&aPiège amélioré : &f" + next.name()));
+        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 0.7f, 1.2f);
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.entity.DroneEntity;
 import fr.cleanthebackyard.cleanTheBackyard.manager.DroneManager;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
 import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -2209,7 +2982,7 @@ public class ShopGui {
                 DroneEntity de = plugin.getDroneManager().getDroneByKey(player, dc.key());
                 if (de != null) stateLine = "&7État : " + stateLabel(de.getState());
                 long[] stats = data.getDroneStats(dc.key());
-                statsLine = "&7Stats : &f" + stats[0] + " cartons &7| &a$" + stats[1];
+                statsLine = "&7Stats : &f" + stats[0] + " cartons &7| &a" + NumberFormatUtil.money(stats[1]);
             }
 
             String status = owned ? "&a[POSSÉDÉ - Clic pour upgrade]" :
@@ -2219,9 +2992,9 @@ public class ShopGui {
             String tierStr = owned ? "&7Tiers : &eVit " + tiers[0] + "&7/&eRayon " + tiers[1] + "&7/&eRev " + tiers[2] : "";
 
             List<String> lore = new ArrayList<>();
-            lore.add(ChatUtil.color("&7Revenu : &a+$" + dc.income() + " / " + dc.intervalSec() + "s"));
+            lore.add(ChatUtil.color("&7Revenu : &a+" + NumberFormatUtil.money(dc.income()) + " / " + dc.intervalSec() + "s"));
             lore.add(ChatUtil.color("&7Vitesse : &f" + dc.speed() + " &7| Rayon : &f" + dc.pickupRange()));
-            lore.add(ChatUtil.color("&7Coût : &f$" + dc.cost()));
+            lore.add(ChatUtil.color("&7Coût : &f" + NumberFormatUtil.money(dc.cost())));
             lore.add(" ");
             lore.add(ChatUtil.color("&7Requis : Sac &f" + dc.bagLevelRequired()
                     + " &7| Outil &f" + dc.toolLevelRequired()
@@ -2239,7 +3012,7 @@ public class ShopGui {
 
         if (data != null) {
             inv.setItem(49, new ItemBuilder(Material.GOLD_INGOT)
-                    .name("&aSolde : &f$" + String.format("%.0f", data.getBalance()))
+                    .name("&aSolde : &f" + NumberFormatUtil.money(data.getBalance()))
                     .build());
         }
     }
@@ -2282,7 +3055,7 @@ public class ShopGui {
                 .build());
 
         inv.setItem(8, new ItemBuilder(Material.GOLD_INGOT)
-                .name("&aSolde : &f$" + String.format("%.0f", data.getBalance()))
+                .name("&aSolde : &f" + NumberFormatUtil.money(data.getBalance()))
                 .build());
     }
 
@@ -2297,7 +3070,7 @@ public class ShopGui {
                         ChatUtil.color("&7" + description),
                         ChatUtil.color("&7" + bonusInfo),
                         " ",
-                        ChatUtil.color(isMax ? "&aMAXIMUM" : "&eCoût : &f$" + cost),
+                        ChatUtil.color(isMax ? "&aMAXIMUM" : "&eCoût : &f" + NumberFormatUtil.money(cost)),
                         ChatUtil.color(isMax ? "" : "&aClic pour améliorer")
                 ))
                 .build();
@@ -2358,6 +3131,7 @@ import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
 import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -2419,7 +3193,7 @@ public class UpgradeGui {
         inv.setItem(6, energyItem);
 
         ItemStack balanceItem = new ItemBuilder(Material.GOLD_INGOT)
-                .name("&aSolde: &f$" + String.format("%.0f", data.getBalance()))
+                .name("&aSolde: &f" + NumberFormatUtil.money(data.getBalance()))
                 .build();
         inv.setItem(22, balanceItem);
     }
@@ -2457,7 +3231,7 @@ public class UpgradeGui {
         lore.add(ChatUtil.color(isMax ? "&aMAXIMUM ATTEINT" : "&7Prochain : &f" + nextInfo));
         if (!chanceStr.isEmpty()) lore.add(ChatUtil.color(chanceStr));
         lore.add(" ");
-        lore.add(ChatUtil.color(isMax ? "&8[MAX]" : "&eCout : &f$" + nextCost));
+        lore.add(ChatUtil.color(isMax ? "&8[MAX]" : "&eCout : &f" + NumberFormatUtil.money(nextCost)));
         if (!isMax) lore.add(ChatUtil.color("&aCliquez pour ameliorer !"));
 
         return new ItemBuilder(Material.IRON_PICKAXE)
@@ -2474,7 +3248,7 @@ public class UpgradeGui {
         lore.add(ChatUtil.color("&7Actuel : &f" + currentInfo));
         lore.add(ChatUtil.color(isMax ? "&aMAXIMUM ATTEINT" : "&7Prochain : &f" + nextInfo));
         lore.add(" ");
-        lore.add(ChatUtil.color(isMax ? "&8[MAX]" : "&eCout : &f$" + nextCost));
+        lore.add(ChatUtil.color(isMax ? "&8[MAX]" : "&eCout : &f" + NumberFormatUtil.money(nextCost)));
         if (!isMax) lore.add(ChatUtil.color("&aCliquez pour ameliorer !"));
         return new ItemBuilder(mat)
                 .name(title + " &8(Niv " + currentLevel + "/" + maxLevel + ")")
@@ -2559,6 +3333,7 @@ import fr.cleanthebackyard.cleanTheBackyard.data.DailyQuest;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
 import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -2608,7 +3383,7 @@ public class VendingMachineGui {
                             ChatUtil.color("&7Énergie restaurée : &a" + restoreStr),
                             ChatUtil.color("&7Votre énergie : &f" + String.format("%.0f", currentEnergy) + "/" + maxEnergy),
                             " ",
-                            ChatUtil.color("&ePrix : &f$" + vi.cost()),
+                            ChatUtil.color("&ePrix : &f" + NumberFormatUtil.money(vi.cost())),
                             ChatUtil.color("&aCliquez pour acheter !")
                     ))
                     .build();
@@ -2618,7 +3393,7 @@ public class VendingMachineGui {
 
         if (data != null) {
             inv.setItem(inv.getSize() - 5, new ItemBuilder(Material.GOLD_INGOT)
-                    .name("&aSolde : &f$" + String.format("%.0f", data.getBalance())).build());
+                    .name("&aSolde : &f" + NumberFormatUtil.money(data.getBalance())).build());
         }
     }
 
@@ -2829,35 +3604,85 @@ public class ConsumableListener implements Listener {
 package fr.cleanthebackyard.cleanTheBackyard.listener;
 
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
+import org.bukkit.block.Block;
 import org.bukkit.entity.FallingBlock;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
+import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.util.BoundingBox;
 
 public class FallingBoxListener implements Listener {
 
     private final CleanTheBackyard plugin;
     private final Material boxMaterial;
+    private final NamespacedKey boxRainKey;
 
     public FallingBoxListener(CleanTheBackyard plugin) {
         this.plugin = plugin;
         Material mat = Material.matchMaterial(plugin.getPluginConfig().getBoxBlock());
         this.boxMaterial = (mat != null) ? mat : Material.NOTE_BLOCK;
+        this.boxRainKey = new NamespacedKey(plugin, "box-rain");
     }
 
     /**
-     * Quand un FallingBlock de notre matériau de carton touche le sol,
-     * on s'assure qu'il se transforme bien en bloc (pas en drop d'item).
+     * Quand un FallingBlock de notre matériau de carton touche le sol :
+     *  - S'il vient de la box rain (marqueur PDC) et atterrit DANS la région
+     *    de pluie, on force la pose en NOTE_BLOCK.
+     *  - S'il atterrit hors de la région ou sans marqueur, on annule la pose
+     *    et on évite tout drop d'item.
      */
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFallingBlockLand(EntityChangeBlockEvent event) {
         if (!(event.getEntity() instanceof FallingBlock fb)) return;
         if (fb.getBlockData().getMaterial() != boxMaterial) return;
 
         fb.setDropItem(false);
-        // On laisse l'event continuer pour que le bloc se pose naturellement.
+
+        boolean isBoxRain = fb.getPersistentDataContainer().has(boxRainKey, PersistentDataType.BYTE);
+        Block landing = event.getBlock();
+
+        if (!isBoxRain) {
+            // FallingBlock de carton non lié à la box rain : on laisse Paper poser.
+            return;
+        }
+
+        BoundingBox region = plugin.getPluginConfig().getBoxRainRegion();
+        // Vérifie que le point d'atterrissage est dans la région XZ
+        // (Y est plus permissif : on accepte tant que c'est dans la fourchette Y de la région)
+        double x = landing.getX() + 0.5;
+        double y = landing.getY() + 0.5;
+        double z = landing.getZ() + 0.5;
+
+        boolean insideXZ = x >= region.getMinX() && x <= region.getMaxX()
+                && z >= region.getMinZ() && z <= region.getMaxZ();
+        boolean insideY = y >= region.getMinY() - 1 && y <= region.getMaxY() + 1;
+
+        if (!insideXZ || !insideY) {
+            // Hors zone : on annule la pose pour ne pas polluer le décor
+            event.setCancelled(true);
+            return;
+        }
+
+        // Dans la zone : on s'assure que le bloc est bien posé en NOTE_BLOCK
+        // (au cas où Paper supprimerait le falling block). On force après 1 tick.
+        event.setCancelled(true);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            Block target = landing;
+            // Si la case est occupée, on grimpe jusqu'à trouver une case libre
+            int safety = 0;
+            while (!target.getType().isAir() && target.getY() < region.getMaxY() && safety++ < 5) {
+                target = target.getRelative(0, 1, 0);
+            }
+            if (target.getType().isAir()) {
+                target.setType(boxMaterial, false);
+            }
+        });
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.listener;
@@ -2981,11 +3806,13 @@ package fr.cleanthebackyard.cleanTheBackyard.listener;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import net.kyori.adventure.text.Component;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -3023,13 +3850,14 @@ public class PlayerListener implements Listener {
             player.sendMessage(ChatUtil.color(
                     "&a&lClean The Backyard &8| &fBienvenue " + player.getName() + " !"
                             + (data.getPrestigeLevel() > 0 ? " &6[Prestige " + data.getPrestigeLevel() + "]" : "")
-                            + "\n&7Solde : &f$" + String.format("%.0f", data.getBalance())
+                            + "\n&7Solde : &f" + NumberFormatUtil.money(data.getBalance())
                             + " &7| Sac : &f" + data.getCurrentBoxes() + "/" +
                             plugin.getBoxManager().getBagCapacity(data.getBagLevel())
             ));
 
             if (isPlayerGameWorld(player.getWorld())) {
                 plugin.getDroneManager().respawnPlayerDrones(player);
+                plugin.getRatManager().onPlayerEnterWorld(player);
             }
         });
     }
@@ -3039,9 +3867,31 @@ public class PlayerListener implements Listener {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
         plugin.getDroneManager().despawnPlayerDrones(player);
+        plugin.getRatManager().onPlayerLeaveWorld(player);
         plugin.getPlayerDataManager().unloadPlayer(uuid);
         plugin.getZoneService().forget(uuid);
         plugin.getHudTask().forgetPlayer(uuid);
+    }
+
+    /**
+     * Hook ESSENTIEL : déclenche la planification des rats quand le joueur entre dans son monde
+     * via /go, /spawn ou tout autre téléport entre mondes.
+     */
+    @EventHandler
+    public void onWorldChange(PlayerChangedWorldEvent event) {
+        Player player = event.getPlayer();
+        World from = event.getFrom();
+        World to = player.getWorld();
+
+        // Quittait un monde de jeu : on stoppe les rats
+        if (isPlayerGameWorld(from)) {
+            plugin.getRatManager().onPlayerLeaveWorld(player);
+        }
+
+        // Entre dans un monde de jeu : on démarre les rats
+        if (isPlayerGameWorld(to)) {
+            plugin.getRatManager().onPlayerEnterWorld(player);
+        }
     }
 
     @EventHandler
@@ -3058,10 +3908,6 @@ public class PlayerListener implements Listener {
         }
     }
 
-    /**
-     * On garde ce listener léger : seulement gestion des effets visuels d'énergie
-     * + déclenchement de la fatigue. La détection de zone est dans ZoneService.
-     */
     @EventHandler
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
@@ -3069,7 +3915,6 @@ public class PlayerListener implements Listener {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return;
 
-        // Skip si même bloc (optimisation classique)
         if (event.getTo() == null) return;
         if (event.getFrom().getBlockX() == event.getTo().getBlockX()
                 && event.getFrom().getBlockY() == event.getTo().getBlockY()
@@ -3096,6 +3941,32 @@ public class PlayerListener implements Listener {
         } else if (currentEnergy > 25) {
             if (player.hasPotionEffect(PotionEffectType.SLOWNESS)) player.removePotionEffect(PotionEffectType.SLOWNESS);
             if (player.hasPotionEffect(PotionEffectType.BLINDNESS)) player.removePotionEffect(PotionEffectType.BLINDNESS);
+        }
+    }
+}
+package fr.cleanthebackyard.cleanTheBackyard.listener;
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.entity.RatEntity;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.Rabbit;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+public class RatListener implements Listener {
+    private final CleanTheBackyard plugin;
+    public RatListener(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Player player)) return;
+        if (!(event.getEntity() instanceof Rabbit rabbit)) return;
+        if (rabbit.getCustomName() == null || !rabbit.getCustomName().contains("Rat voleur")) return;
+        event.setCancelled(true); // pas de dégât vanilla : un coup = mort
+        RatEntity rat = plugin.getRatManager().findByEntity(rabbit);
+        if (rat != null && rat.getOwner().equals(player)) {
+            rat.killByPlayer();
         }
     }
 }
@@ -3593,16 +4464,21 @@ public class DroneManager {
     }
 }
 package fr.cleanthebackyard.cleanTheBackyard.manager;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.DailyQuest;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import org.bukkit.entity.Player;
+
 public class EconomyManager {
     private final CleanTheBackyard plugin;
+
     public EconomyManager(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
+
     public void credit(Player player, double amount) {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return;
@@ -3616,16 +4492,19 @@ public class EconomyManager {
         plugin.getHudTask().registerGain(player, finalAmount, multiplier);
         player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 0.5f, 1.5f);
     }
+
     public boolean debit(Player player, double amount, String reason) {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return false;
         if (!data.removeBalance(amount)) {
-            player.sendMessage(ChatUtil.color("&cFonds insuffisants ! Il vous manque $"
-                    + String.format("%.0f", amount - data.getBalance()) + " pour : " + reason));
+            double missing = amount - data.getBalance();
+            player.sendMessage(ChatUtil.color("&cFonds insuffisants ! Il vous manque "
+                    + NumberFormatUtil.money(missing) + " pour : " + reason));
             return false;
         }
         return true;
     }
+
     public void sellBag(Player player) {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         if (data == null) return;
@@ -3644,17 +4523,17 @@ public class EconomyManager {
         double finalAmount = baseTotal * mult;
         credit(player, baseTotal);
         player.sendMessage(ChatUtil.color(
-                "&aVente réussie ! &f" + boxes + " cartons &a-> &f$" + String.format("%.0f", finalAmount)
+                "&aVente réussie ! &f" + boxes + " cartons &a-> &f" + NumberFormatUtil.money(finalAmount)
         ));
         player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
         plugin.getQuestManager().onProgress(player, DailyQuest.Type.SELL_TIMES, 1);
     }
+
     public double getBalance(Player player) {
         PlayerData data = plugin.getPlayerDataManager().get(player);
         return data != null ? data.getBalance() : 0;
     }
 }
-
 package fr.cleanthebackyard.cleanTheBackyard.manager;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.event.BlackMarketEvent;
@@ -3699,6 +4578,7 @@ public class EventManager {
     public boolean isGoldenDroneSpawned() { return goldenDroneEvent.isSpawned(); }
     public boolean claimGoldenDrone(Player p, UUID entityUUID) { return goldenDroneEvent.claim(p, entityUUID); }
 }
+
 package fr.cleanthebackyard.cleanTheBackyard.manager;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.DailyQuest;
@@ -3726,7 +4606,6 @@ public class PlayerDataManager {
         if (interval <= 0) return;
         long ticks = interval * 20L;
         autoSaveTask = plugin.getServer().getScheduler().runTaskTimerAsynchronously(plugin, () -> {
-            // Copie pour éviter ConcurrentModification pendant qu'on itère
             List<PlayerData> snapshot = new ArrayList<>(cache.values());
             for (PlayerData d : snapshot) {
                 try { saveData(d); }
@@ -3783,6 +4662,11 @@ public class PlayerDataManager {
         yml.set("unlimited-energy-until", data.getUnlimitedEnergyUntil());
         yml.set("double-sell-until", data.getDoubleSellUntil());
         yml.set("black-market-until", data.getBlackMarketUntil());
+        yml.set("security-level", data.getSecurityLevel());
+        yml.set("trap-level", data.getTrapLevel());
+        yml.set("total-stolen-by-rats", data.getTotalStolenByRats());
+        yml.set("total-rats-killed", data.getTotalRatsKilled());
+        yml.set("total-rats-scared", data.getTotalRatsScared());
         ConfigurationSection upgSec = yml.createSection("drone-upgrades");
         for (Map.Entry<String, int[]> e : data.getAllDroneUpgrades().entrySet()) {
             int[] t = e.getValue();
@@ -3816,6 +4700,11 @@ public class PlayerDataManager {
     private PlayerData deserialize(UUID uuid, String name, YamlConfiguration yml) {
         PlayerData d = new PlayerData(uuid, name);
         d.setBalance(yml.getDouble("balance", 0));
+        // Migration : si un ancien stash-balance existe, on l'ajoute au solde
+        long legacyStash = yml.getLong("stash-balance", 0L);
+        if (legacyStash > 0) {
+            d.setBalance(d.getBalance() + legacyStash);
+        }
         d.setLifetimeEarned(yml.getLong("lifetime-earned", 0L));
         d.setTotalBoxesBroken(yml.getLong("total-boxes-broken", 0L));
         d.setBagLevel(yml.getInt("bag-level", 1));
@@ -3830,6 +4719,11 @@ public class PlayerDataManager {
         d.setRawUnlimitedEnergyUntil(yml.getLong("unlimited-energy-until", 0L));
         d.setRawDoubleSellUntil(yml.getLong("double-sell-until", 0L));
         d.setRawBlackMarketUntil(yml.getLong("black-market-until", 0L));
+        d.setSecurityLevel(yml.getInt("security-level", 0));
+        d.setTrapLevel(yml.getInt("trap-level", 0));
+        d.setTotalStolenByRats(yml.getLong("total-stolen-by-rats", 0L));
+        d.setTotalRatsKilled(yml.getLong("total-rats-killed", 0L));
+        d.setTotalRatsScared(yml.getLong("total-rats-scared", 0L));
         ConfigurationSection upgSec = yml.getConfigurationSection("drone-upgrades");
         if (upgSec != null) {
             for (String key : upgSec.getKeys(false)) {
@@ -3871,59 +4765,78 @@ public class PlayerDataManager {
     }
     private File getFile(UUID uuid) { return new File(playersFolder, uuid.toString() + ".yml"); }
 }
-package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+package fr.cleanthebackyard.cleanTheBackyard.gui;
+
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.title.Title;
-import org.bukkit.Sound;
+import fr.cleanthebackyard.cleanTheBackyard.util.ItemBuilder;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
-import java.time.Duration;
-public class PrestigeManager {
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+
+import java.util.List;
+
+public class PrestigeGui {
+
+    private static final String TITLE = ChatUtil.color("&8[&6✦ AUTEL DE PRESTIGE ✦&8]");
     private final CleanTheBackyard plugin;
-    public PrestigeManager(CleanTheBackyard plugin) {
+
+    public PrestigeGui(CleanTheBackyard plugin) {
         this.plugin = plugin;
     }
-    public boolean canPrestige(PlayerData data) {
-        long required = plugin.getPluginConfig().getPrestigeRequiredEarned()
-                * (long) Math.pow(2, data.getPrestigeLevel());
-        return data.getLifetimeEarned() >= required
-                && data.getPrestigeLevel() < plugin.getPluginConfig().getPrestigeMaxLevel();
+
+    public void open(Player player) {
+        CtbHolder holder = new CtbHolder(GuiManager.GuiType.PRESTIGE);
+        Inventory inv = Bukkit.createInventory(holder, 27, TITLE);
+        holder.setInventory(inv);
+        build(inv, player);
+        player.openInventory(inv);
     }
-    public long getRequiredForNextPrestige(PlayerData data) {
-        return plugin.getPluginConfig().getPrestigeRequiredEarned()
-                * (long) Math.pow(2, data.getPrestigeLevel());
-    }
-    public boolean prestige(Player player) {
+
+    private void build(Inventory inv, Player player) {
+        ItemStack glass = new ItemBuilder(Material.MAGENTA_STAINED_GLASS_PANE).name(" ").build();
+        for (int i = 0; i < inv.getSize(); i++) inv.setItem(i, glass);
+
         PlayerData data = plugin.getPlayerDataManager().get(player);
-        if (data == null) return false;
-        if (!canPrestige(data)) {
-            long need = getRequiredForNextPrestige(data) - data.getLifetimeEarned();
-            player.sendMessage(ChatUtil.color("&cIl te manque &f$" + need + "&c (gains totaux) pour prestige !"));
-            return false;
+        if (data == null) return;
+
+        boolean canPrestige = plugin.getPrestigeManager().canPrestige(data);
+        long required = plugin.getPrestigeManager().getRequiredForNextPrestige(data);
+        double bonusPercent = plugin.getPluginConfig().getPrestigeBonusPerLevel() * 100;
+
+        inv.setItem(4, new ItemBuilder(Material.NETHER_STAR)
+                .name("&6Prestige actuel : &f" + data.getPrestigeLevel())
+                .lore(List.of(
+                        ChatUtil.color("&7Bonus permanent : &a+" + String.format("%.0f", bonusPercent * data.getPrestigeLevel()) + "% &7gains"),
+                        ChatUtil.color("&7Total gagné (lifetime) : &f" + NumberFormatUtil.money(data.getLifetimeEarned())),
+                        ChatUtil.color("&7Pour le prochain : &f" + NumberFormatUtil.money(required))
+                )).build());
+
+        inv.setItem(13, new ItemBuilder(canPrestige ? Material.BEACON : Material.BARRIER)
+                .name(canPrestige ? "&a✦ CLIC POUR PRESTIGE ✦" : "&cConditions non remplies")
+                .lore(List.of(
+                        ChatUtil.color("&c⚠ Reset : solde, niveaux, sac"),
+                        ChatUtil.color("&c⚠ Reset : drones possédés + leurs upgrades"),
+                        ChatUtil.color("&7Conservé : stats lifetime, prestige"),
+                        " ",
+                        ChatUtil.color("&aGain : +" + String.format("%.0f", bonusPercent) + "% gains permanents")
+                )).build());
+    }
+
+    public boolean handleClick(Player player, InventoryClickEvent event) {
+        if (event.getRawSlot() == 13) {
+            if (plugin.getPrestigeManager().prestige(player)) {
+                player.closeInventory();
+            } else {
+                build(event.getInventory(), player);
+            }
         }
-        data.setBalance(0);
-        data.setBagLevel(1);
-        data.setToolLevel(1);
-        data.setEnergyLevel(1);
-        data.setCurrentEnergy(100);
-        data.clearBag();
-        data.getOwnedDrones().clear();
-        data.getAllDroneUpgrades().clear();
-        plugin.getDroneManager().despawnPlayerDrones(player);
-        data.setPrestigeLevel(data.getPrestigeLevel() + 1);
-        double bonus = plugin.getPluginConfig().getPrestigeBonusPerLevel() * 100;
-        Title title = Title.title(
-                Component.text(ChatUtil.color("&6✦ PRESTIGE " + data.getPrestigeLevel() + " ✦")),
-                Component.text(ChatUtil.color("&e+" + String.format("%.0f", bonus * data.getPrestigeLevel()) + "% gains permanents")),
-                Title.Times.times(Duration.ofMillis(500), Duration.ofSeconds(4), Duration.ofSeconds(1))
-        );
-        player.showTitle(title);
-        player.playSound(player.getLocation(), Sound.UI_TOAST_CHALLENGE_COMPLETE, 1.0f, 0.8f);
-        player.sendMessage(ChatUtil.color("&6Tu as prestige ! Bonus permanent : &f+"
-                + String.format("%.0f", bonus * data.getPrestigeLevel()) + "% &6sur tous tes gains."));
-        player.sendMessage(ChatUtil.color("&7Reset effectué : solde, niveaux, sac, drones et leurs upgrades."));
         return true;
     }
 }
@@ -3999,6 +4912,173 @@ public class QuestManager {
         return true;
     }
 }
+package fr.cleanthebackyard.cleanTheBackyard.manager;
+
+import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
+import fr.cleanthebackyard.cleanTheBackyard.entity.RatEntity;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.Rabbit;
+import org.bukkit.scheduler.BukkitRunnable;
+import org.bukkit.scheduler.BukkitTask;
+
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+
+public class RatManager {
+
+    private final CleanTheBackyard plugin;
+    private final Map<UUID, RatEntity> activeRats = new ConcurrentHashMap<>();
+    private final Map<UUID, BukkitTask> scheduledSpawns = new ConcurrentHashMap<>();
+
+    public RatManager(CleanTheBackyard plugin) {
+        this.plugin = plugin;
+    }
+
+    public void onPlayerEnterWorld(Player player) {
+        if (!plugin.getPluginConfig().isRatsEnabled()) {
+            plugin.getLogger().info("[CTB-Rats] Rats désactivés dans la config, skip " + player.getName());
+            return;
+        }
+        // Si déjà planifié, on ne refait pas
+        if (scheduledSpawns.containsKey(player.getUniqueId())) {
+            plugin.getLogger().info("[CTB-Rats] Spawn déjà planifié pour " + player.getName());
+            return;
+        }
+        plugin.getLogger().info("[CTB-Rats] Planification du premier rat pour " + player.getName());
+        scheduleNextRat(player);
+    }
+
+    public void onPlayerLeaveWorld(Player player) {
+        UUID uuid = player.getUniqueId();
+        BukkitTask t = scheduledSpawns.remove(uuid);
+        if (t != null) {
+            t.cancel();
+            plugin.getLogger().info("[CTB-Rats] Spawn annulé pour " + player.getName() + " (quit world)");
+        }
+        RatEntity rat = activeRats.remove(uuid);
+        if (rat != null) rat.stop(false);
+    }
+
+    private void scheduleNextRat(Player player) {
+        UUID uuid = player.getUniqueId();
+        BukkitTask existing = scheduledSpawns.remove(uuid);
+        if (existing != null) existing.cancel();
+
+        PluginConfig cfg = plugin.getPluginConfig();
+        int min = Math.max(1, cfg.getRatsMinSpawnSec());
+        int max = Math.max(min + 1, cfg.getRatsMaxSpawnSec());
+        int delay = min + ThreadLocalRandom.current().nextInt(max - min);
+
+        plugin.getLogger().info("[CTB-Rats] Prochain rat pour " + player.getName() + " dans " + delay + "s");
+
+        BukkitTask task = new BukkitRunnable() {
+            @Override
+            public void run() {
+                scheduledSpawns.remove(uuid);
+                if (!player.isOnline()) return;
+                trySpawnRat(player);
+                if (player.isOnline()) scheduleNextRat(player);
+            }
+        }.runTaskLater(plugin, delay * 20L);
+
+        scheduledSpawns.put(uuid, task);
+    }
+
+    private void trySpawnRat(Player player) {
+        if (!plugin.getPluginConfig().isRatsEnabled()) {
+            plugin.getLogger().info("[CTB-Rats] Skip spawn: rats désactivés");
+            return;
+        }
+        String expected = plugin.getPluginConfig().getPlayerWorldName(player.getUniqueId());
+        if (!player.getWorld().getName().equals(expected)) {
+            plugin.getLogger().info("[CTB-Rats] Skip spawn pour " + player.getName()
+                    + " : pas dans son monde (actuellement dans " + player.getWorld().getName()
+                    + ", attendu " + expected + ")");
+            return;
+        }
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) {
+            plugin.getLogger().info("[CTB-Rats] Skip spawn pour " + player.getName() + " : PlayerData null");
+            return;
+        }
+        PluginConfig cfg = plugin.getPluginConfig();
+        if (data.getBalance() < cfg.getRatsMinBalanceToTrigger()) {
+            plugin.getLogger().info("[CTB-Rats] Skip spawn pour " + player.getName()
+                    + " : balance trop basse (" + (long) data.getBalance()
+                    + " < " + cfg.getRatsMinBalanceToTrigger() + ")");
+            return;
+        }
+        if (activeRats.containsKey(player.getUniqueId())) {
+            plugin.getLogger().info("[CTB-Rats] Skip spawn pour " + player.getName() + " : rat déjà actif");
+            return;
+        }
+        spawnRatForPlayer(player, data);
+    }
+
+    public boolean forceSpawnRat(Player player) {
+        String expected = plugin.getPluginConfig().getPlayerWorldName(player.getUniqueId());
+        if (!player.getWorld().getName().equals(expected)) return false;
+        PlayerData data = plugin.getPlayerDataManager().get(player);
+        if (data == null) return false;
+        if (activeRats.containsKey(player.getUniqueId())) return false;
+        spawnRatForPlayer(player, data);
+        return true;
+    }
+
+    private void spawnRatForPlayer(Player player, PlayerData data) {
+        PluginConfig cfg = plugin.getPluginConfig();
+        double balance = data.getBalance();
+        double pct = cfg.getRatsStealPercentMin()
+                + ThreadLocalRandom.current().nextDouble() * (cfg.getRatsStealPercentMax() - cfg.getRatsStealPercentMin());
+        long stealAmount = Math.min(cfg.getRatsStealCap(), Math.max(1L, (long) (balance * pct)));
+
+        World w = player.getWorld();
+        Location stashLoc = cfg.getStashLocation(w).clone().add(0.5, 0, 0.5);
+
+        RatEntity rat = new RatEntity(player, stashLoc, stealAmount);
+        activeRats.put(player.getUniqueId(), rat);
+
+        plugin.getLogger().info("[CTB-Rats] Rat spawn pour " + player.getName()
+                + " (steal=" + stealAmount + "$ depuis balance=" + (long) balance + "$)");
+    }
+
+    public void unregister(RatEntity rat) {
+        activeRats.values().removeIf(r -> r == rat);
+    }
+
+    public RatEntity findByEntity(Entity bukkitEntity) {
+        if (!(bukkitEntity instanceof Rabbit)) return null;
+        if (bukkitEntity.getCustomName() == null || !bukkitEntity.getCustomName().contains("Rat voleur")) return null;
+        for (RatEntity r : activeRats.values()) {
+            if (r.getOwner().getWorld().equals(bukkitEntity.getWorld())) {
+                return r;
+            }
+        }
+        return null;
+    }
+
+    public void shutdown() {
+        scheduledSpawns.values().forEach(BukkitTask::cancel);
+        scheduledSpawns.clear();
+        activeRats.values().forEach(r -> r.stop(false));
+        activeRats.clear();
+        for (World w : Bukkit.getWorlds()) {
+            for (Entity e : w.getEntities()) {
+                if (e instanceof Rabbit && e.getCustomName() != null && e.getCustomName().contains("Rat voleur")) {
+                    e.remove();
+                }
+            }
+        }
+    }
+}
 package fr.cleanthebackyard.cleanTheBackyard.service;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
@@ -4010,13 +5090,16 @@ import org.bukkit.scheduler.BukkitRunnable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+
+import static fr.cleanthebackyard.cleanTheBackyard.util.LocationUtil.inRadius;
+
 /**
  * Détecte la zone du joueur via un tick périodique (toutes les 5 ticks = 4Hz)
  * au lieu d'un check sur chaque PlayerMoveEvent (coûteux).
  * Cache la dernière zone pour ne déclencher qu'à la transition.
  */
 public class ZoneService {
-    public enum Zone { NONE, GARAGE, VENDING_MACHINE, DRONE_SHOP, SELL_ZONE, QUEST_BOARD, PRESTIGE_ALTAR }
+    public enum Zone { NONE, GARAGE, VENDING_MACHINE, DRONE_SHOP, SELL_ZONE, QUEST_BOARD, PRESTIGE_ALTAR, STASH }
     private final CleanTheBackyard plugin;
     private final Map<UUID, Zone> currentZone = new HashMap<>();
     private BukkitRunnable task;
@@ -4071,6 +5154,7 @@ public class ZoneService {
             case SELL_ZONE -> plugin.getEconomyManager().sellBag(p);
             case QUEST_BOARD -> plugin.getGuiManager().openQuestGui(p);
             case PRESTIGE_ALTAR -> plugin.getGuiManager().openPrestigeGui(p);
+            case STASH -> plugin.getGuiManager().openSecurityGui(p);
             default -> {}
         }
     }
@@ -4078,12 +5162,13 @@ public class ZoneService {
         PluginConfig cfg = plugin.getPluginConfig();
         World world = loc.getWorld();
         if (world == null) return Zone.NONE;
-        if (LocationUtil.inRadius(loc, cfg.getGarageLocation(world), cfg.getGarageRadius())) return Zone.GARAGE;
-        if (LocationUtil.inRadius(loc, cfg.getVendingMachineLocation(world), cfg.getVendingMachineRadius())) return Zone.VENDING_MACHINE;
-        if (LocationUtil.inRadius(loc, cfg.getDroneShopLocation(world), cfg.getDroneShopRadius())) return Zone.DRONE_SHOP;
-        if (LocationUtil.inRadius(loc, cfg.getSellZoneCenter(world), cfg.getSellZoneRadius())) return Zone.SELL_ZONE;
-        if (LocationUtil.inRadius(loc, cfg.getQuestBoardLocation(world), cfg.getQuestBoardRadius())) return Zone.QUEST_BOARD;
-        if (LocationUtil.inRadius(loc, cfg.getPrestigeAltarLocation(world), cfg.getPrestigeAltarRadius())) return Zone.PRESTIGE_ALTAR;
+        if (inRadius(loc, cfg.getGarageLocation(world), cfg.getGarageRadius())) return Zone.GARAGE;
+        if (inRadius(loc, cfg.getVendingMachineLocation(world), cfg.getVendingMachineRadius())) return Zone.VENDING_MACHINE;
+        if (inRadius(loc, cfg.getDroneShopLocation(world), cfg.getDroneShopRadius())) return Zone.DRONE_SHOP;
+        if (inRadius(loc, cfg.getSellZoneCenter(world), cfg.getSellZoneRadius())) return Zone.SELL_ZONE;
+        if (inRadius(loc, cfg.getQuestBoardLocation(world), cfg.getQuestBoardRadius())) return Zone.QUEST_BOARD;
+        if (inRadius(loc, cfg.getPrestigeAltarLocation(world), cfg.getPrestigeAltarRadius())) return Zone.PRESTIGE_ALTAR;
+        if (inRadius(loc, cfg.getStashLocation(world), cfg.getStashRadius())) return Zone.STASH;
         return Zone.NONE;
     }
 }
@@ -4140,6 +5225,7 @@ package fr.cleanthebackyard.cleanTheBackyard.task;
 import fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.data.PlayerData;
 import fr.cleanthebackyard.cleanTheBackyard.util.ChatUtil;
+import fr.cleanthebackyard.cleanTheBackyard.util.NumberFormatUtil;
 import net.kyori.adventure.text.Component;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -4176,7 +5262,6 @@ public class HudTask extends BukkitRunnable {
         String hubName = plugin.getPluginConfig().getHubWorldName();
 
         for (Player player : plugin.getServer().getOnlinePlayers()) {
-            // Skip joueurs au hub : pas besoin d'actionbar permanente
             if (player.getWorld() != null && player.getWorld().getName().equals(hubName)) continue;
             if (hudDisabled.contains(player.getUniqueId())) continue;
             if (plugin.getBoxManager().isCollecting(player.getUniqueId())) continue;
@@ -4216,14 +5301,12 @@ public class HudTask extends BukkitRunnable {
         if (data.getPrestigeLevel() > 0) {
             hud.append(String.format("&6P%d &7| ", data.getPrestigeLevel()));
         }
-        hud.append(String.format(
-                "&aSolde: &f$%.0f &7| &fSac: &f%d/%d &7| &7Énergie: &f%.0f/%d",
-                data.getBalance(),
-                data.getCurrentBoxes(),
-                plugin.getBoxManager().getBagCapacity(data.getBagLevel()),
-                data.getCurrentEnergy(),
-                plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel())
-        ));
+        hud.append("&aSolde: &f").append(NumberFormatUtil.money(data.getBalance()))
+                .append(" &7| &fSac: &f").append(data.getCurrentBoxes())
+                .append("/").append(plugin.getBoxManager().getBagCapacity(data.getBagLevel()))
+                .append(" &7| &7Énergie: &f").append(String.format("%.0f", data.getCurrentEnergy()))
+                .append("/").append(plugin.getBoxManager().getMaxEnergyForLevel(data.getEnergyLevel()));
+
         if (player != null) {
             if (globalMult > 1.0) hud.append(String.format(" &7| &ex%.1f &fGLOBAL", globalMult));
             if (data.hasDoubleSell()) hud.append(String.format(" &7| &ex2 &f%ds", data.getDoubleSellRemainingSeconds()));
@@ -4248,13 +5331,14 @@ public class HudTask extends BukkitRunnable {
     }
 
     private String buildGainString(double amount, double multiplier) {
-        StringBuilder gain = new StringBuilder(ChatUtil.color("&a💰 +$" + String.format("%.0f", amount)));
+        StringBuilder gain = new StringBuilder(ChatUtil.color("&a💰 +" + NumberFormatUtil.money(amount)));
         if (multiplier > 1.0) {
             gain.append(ChatUtil.color(" &e[x" + String.format("%.1f", multiplier) + "]"));
         }
         return gain.toString();
     }
 }
+
 package fr.cleanthebackyard.cleanTheBackyard.util;
 import net.kyori.adventure.text.Component;
 public final class ChatUtil {
@@ -4315,6 +5399,83 @@ public final class LocationUtil {
         return player.distanceSquared(target) <= radius * radius;
     }
 }
+package fr.cleanthebackyard.cleanTheBackyard.util;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.block.Block;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.util.BoundingBox;
+
+public final class RegionUtil {
+
+    private RegionUtil() {}
+
+    /**
+     * Copie une région cubique depuis un monde source vers un monde destination.
+     * Les coordonnées du rectangle sont identiques dans les deux mondes.
+     * Exécution synchrone, à appeler depuis le thread principal.
+     */
+    public static int copyRegion(World source, World dest, BoundingBox region) {
+        if (source == null || dest == null || region == null) return 0;
+
+        int minX = (int) Math.floor(region.getMinX());
+        int minY = (int) Math.floor(region.getMinY());
+        int minZ = (int) Math.floor(region.getMinZ());
+        int maxX = (int) Math.floor(region.getMaxX());
+        int maxY = (int) Math.floor(region.getMaxY());
+        int maxZ = (int) Math.floor(region.getMaxZ());
+
+        int count = 0;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    Block src = source.getBlockAt(x, y, z);
+                    Block dst = dest.getBlockAt(x, y, z);
+                    BlockData srcData = src.getBlockData();
+                    if (!dst.getBlockData().matches(srcData)) {
+                        dst.setBlockData(srcData, false);
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Variante : ne copie QUE les blocs d'un type donné (utile pour ne re-placer
+     * que les cartons sans toucher au reste du décor).
+     */
+    public static int copyRegionFiltered(World source, World dest, BoundingBox region, Material filterMaterial) {
+        if (source == null || dest == null || region == null || filterMaterial == null) return 0;
+
+        int minX = (int) Math.floor(region.getMinX());
+        int minY = (int) Math.floor(region.getMinY());
+        int minZ = (int) Math.floor(region.getMinZ());
+        int maxX = (int) Math.floor(region.getMaxX());
+        int maxY = (int) Math.floor(region.getMaxY());
+        int maxZ = (int) Math.floor(region.getMaxZ());
+
+        int count = 0;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    Block src = source.getBlockAt(x, y, z);
+                    if (src.getType() != filterMaterial) continue;
+                    Block dst = dest.getBlockAt(x, y, z);
+                    if (dst.getType() != filterMaterial) {
+                        dst.setBlockData(src.getBlockData(), false);
+                        count++;
+                    }
+                }
+            }
+        }
+        return count;
+    }
+}
 package fr.cleanthebackyard.cleanTheBackyard;
 import fr.cleanthebackyard.cleanTheBackyard.command.AdminCommand;
 import fr.cleanthebackyard.cleanTheBackyard.command.PlayCommand;
@@ -4339,6 +5500,7 @@ public final class CleanTheBackyard extends JavaPlugin {
     private ZoneService        zoneService;
     private HudTask            hudTask;
     private EnergyRegenTask    energyRegenTask;
+    private RatManager ratManager;
     @Override
     public void onEnable() {
         instance = this;
@@ -4353,6 +5515,7 @@ public final class CleanTheBackyard extends JavaPlugin {
         questManager      = new QuestManager(this);
         prestigeManager   = new PrestigeManager(this);
         zoneService       = new ZoneService(this);
+        ratManager        = new RatManager(this);
         // Listeners
         var pm = getServer().getPluginManager();
         pm.registerEvents(new PlayerListener(this), this);
@@ -4363,6 +5526,7 @@ public final class CleanTheBackyard extends JavaPlugin {
         pm.registerEvents(new GameRuleListener(this), this);
         pm.registerEvents(new FallingBoxListener(this), this);
         pm.registerEvents(new WorldProtectionListener(this), this);
+        pm.registerEvents(new RatListener(this), this);
         // Commands
         var ctbCmd = getCommand("ctb");
         AdminCommand adminCommand = new AdminCommand(this);
@@ -4371,7 +5535,7 @@ public final class CleanTheBackyard extends JavaPlugin {
             ctbCmd.setTabCompleter(adminCommand);
         }
         PlayCommand playCommand = new PlayCommand(this);
-        for (String name : new String[]{"ctbplay", "create", "go", "spawn"}) {
+        for (String name : new String[]{"ctbplay", "create", "go", "spawn", "setspawn", "setplayerspawn"}) {
             var c = getCommand(name);
             if (c != null) c.setExecutor(playCommand);
         }
@@ -4396,8 +5560,112 @@ public final class CleanTheBackyard extends JavaPlugin {
         if (playerDataManager != null) playerDataManager.stopAutoSave();
         if (droneManager != null) droneManager.shutdown();
         if (playerDataManager != null) playerDataManager.saveAll();
+        if (ratManager != null) ratManager.shutdown();
         getLogger().info("[CleanTheBackyard] Plugin déchargé.");
     }
+
+    public RatManager getRatManager() { return ratManager; }
+    public static CleanTheBackyard getInstance() { return instance; }
+    public PluginConfig      getPluginConfig()     { return pluginConfig; }
+    public PlayerDataManager getPlayerDataManager(){ return playerDataManager; }
+    public EconomyManager    getEconomyManager()   { return economyManager; }
+    public BoxManager        getBoxManager()       { return boxManager; }
+    public DroneManager      getDroneManager()     { return droneManager; }
+    public EventManager      getEventManager()     { return eventManager; }
+    public GuiManager        getGuiManager()       { return guiManager; }
+    public QuestManager      getQuestManager()     { return questManager; }
+    public PrestigeManager   getPrestigeManager()  { return prestigeManager; }
+    public ZoneService       getZoneService()      { return zoneService; }
+    public HudTask           getHudTask()          { return hudTask; }
+}package fr.cleanthebackyard.cleanTheBackyard;
+import fr.cleanthebackyard.cleanTheBackyard.command.AdminCommand;
+import fr.cleanthebackyard.cleanTheBackyard.command.PlayCommand;
+import fr.cleanthebackyard.cleanTheBackyard.config.PluginConfig;
+import fr.cleanthebackyard.cleanTheBackyard.gui.GuiManager;
+import fr.cleanthebackyard.cleanTheBackyard.listener.*;
+import fr.cleanthebackyard.cleanTheBackyard.manager.*;
+import fr.cleanthebackyard.cleanTheBackyard.service.ZoneService;
+import fr.cleanthebackyard.cleanTheBackyard.task.*;
+import org.bukkit.plugin.java.JavaPlugin;
+public final class CleanTheBackyard extends JavaPlugin {
+    private static CleanTheBackyard instance;
+    private PluginConfig       pluginConfig;
+    private PlayerDataManager  playerDataManager;
+    private EconomyManager     economyManager;
+    private BoxManager         boxManager;
+    private DroneManager       droneManager;
+    private EventManager       eventManager;
+    private GuiManager         guiManager;
+    private QuestManager       questManager;
+    private PrestigeManager    prestigeManager;
+    private ZoneService        zoneService;
+    private HudTask            hudTask;
+    private EnergyRegenTask    energyRegenTask;
+    private RatManager ratManager;
+    @Override
+    public void onEnable() {
+        instance = this;
+        saveDefaultConfig();
+        pluginConfig = new PluginConfig(this);
+        playerDataManager = new PlayerDataManager(this);
+        economyManager    = new EconomyManager(this);
+        boxManager        = new BoxManager(this);
+        droneManager      = new DroneManager(this);
+        eventManager      = new EventManager(this);
+        guiManager        = new GuiManager(this);
+        questManager      = new QuestManager(this);
+        prestigeManager   = new PrestigeManager(this);
+        zoneService       = new ZoneService(this);
+        ratManager        = new RatManager(this);
+        // Listeners
+        var pm = getServer().getPluginManager();
+        pm.registerEvents(new PlayerListener(this), this);
+        pm.registerEvents(new BoxBreakListener(this), this);
+        pm.registerEvents(new GuiListener(this), this);
+        pm.registerEvents(new ConsumableListener(this), this);
+        pm.registerEvents(new GoldenDroneListener(this), this);
+        pm.registerEvents(new GameRuleListener(this), this);
+        pm.registerEvents(new FallingBoxListener(this), this);
+        pm.registerEvents(new WorldProtectionListener(this), this);
+        pm.registerEvents(new RatListener(this), this);
+        // Commands
+        var ctbCmd = getCommand("ctb");
+        AdminCommand adminCommand = new AdminCommand(this);
+        if (ctbCmd != null) {
+            ctbCmd.setExecutor(adminCommand);
+            ctbCmd.setTabCompleter(adminCommand);
+        }
+        PlayCommand playCommand = new PlayCommand(this);
+        for (String name : new String[]{"ctbplay", "create", "go", "spawn", "setspawn", "setplayerspawn"}) {
+            var c = getCommand(name);
+            if (c != null) c.setExecutor(playCommand);
+        }
+        // Tasks
+        hudTask         = new HudTask(this);
+        energyRegenTask = new EnergyRegenTask(this);
+        hudTask.runTaskTimer(this, 0L, 4L);
+        energyRegenTask.runTaskTimer(this, 20L, 20L);
+        // Services
+        zoneService.start();
+        playerDataManager.startAutoSave();
+        // Événements aléatoires
+        eventManager.scheduleNextUfoEvent();
+        eventManager.scheduleNextGoldenDrone();
+        eventManager.scheduleNextBoxRain();
+        eventManager.scheduleNextBlackMarket();
+        getLogger().info("[CleanTheBackyard] Plugin chargé avec succès !");
+    }
+    @Override
+    public void onDisable() {
+        if (zoneService != null) zoneService.stop();
+        if (playerDataManager != null) playerDataManager.stopAutoSave();
+        if (droneManager != null) droneManager.shutdown();
+        if (playerDataManager != null) playerDataManager.saveAll();
+        if (ratManager != null) ratManager.shutdown();
+        getLogger().info("[CleanTheBackyard] Plugin déchargé.");
+    }
+
+    public RatManager getRatManager() { return ratManager; }
     public static CleanTheBackyard getInstance() { return instance; }
     public PluginConfig      getPluginConfig()     { return pluginConfig; }
     public PlayerDataManager getPlayerDataManager(){ return playerDataManager; }
@@ -4411,6 +5679,7 @@ public final class CleanTheBackyard extends JavaPlugin {
     public ZoneService       getZoneService()      { return zoneService; }
     public HudTask           getHudTask()          { return hudTask; }
 }
+
 # =============================================
 #   CleanTheBackyard v0.3 - Config rééquilibrée
 # =============================================
@@ -4419,6 +5688,65 @@ template-world: "ctb_template"
 player-world-prefix: "ctb_"
 game-world: "world"
 
+
+# Spawn du hub (défini via /setspawn)
+hub-spawn:
+  x: -103.5
+  y: 176
+  z: -48.5
+  yaw: -90
+  pitch: 0
+
+# Spawn dans les mondes joueurs (défini via /setplayerspawn dans le template)
+player-world-spawn:
+  x: 0.5
+  y: -60
+  z: 0.5
+  yaw: 0
+  pitch: 0
+
+# Stash (coffre visuel + zone d'interaction)
+stash:
+  x: -3
+  y: -60
+  z: -12
+  radius: 2.5
+
+stash-region:
+  min: { x: 6, y: -61, z: -8 }
+  max: { x: 10, y: -55, z: -4 }
+
+# Rats voleurs
+rats:
+  enabled: true
+  spawn-min-sec: 30           # premier spawn et entre chaque tentative  au lieu de 180
+  spawn-max-sec: 60           # au lieu de 480
+  steal-percent-min: 0.01     # 1% du stash
+  steal-percent-max: 0.05     # 5% max
+  steal-cap: 5000             # plafond absolu par vol
+  time-to-steal-sec: 5       # temps pendant lequel le rat "vole" au stash avant de fuir   au lieu de 20
+  speed: 0.3                  # vitesse de déplacement
+  min-balance-to-trigger: 200 # pas de rat si stash < 200
+  spawn-radius: 6.0           # où le rat apparaît autour du stash
+
+# Caméras de surveillance
+security-upgrades:
+  - { level: 1, name: "Caméra basique",      detection-chance: 0.25, cost: 1000 }
+  - { level: 2, name: "Caméra HD",           detection-chance: 0.50, cost: 5000 }
+  - { level: 3, name: "Caméra IR",           detection-chance: 0.75, cost: 25000 }
+  - { level: 4, name: "Caméra IA",           detection-chance: 0.95, cost: 100000 }
+  - { level: 5, name: "Réseau de drones",    detection-chance: 1.00, cost: 500000 }
+
+# Pièges à rats
+trap-upgrades:
+  - { level: 1, name: "Tapette",             kill-chance: 0.15, cost: 2000 }
+  - { level: 2, name: "Tapette renforcée",   kill-chance: 0.30, cost: 10000 }
+  - { level: 3, name: "Piège électrique",    kill-chance: 0.50, cost: 50000 }
+  - { level: 4, name: "Tourelle automatique",kill-chance: 0.75, cost: 250000 }
+  - { level: 5, name: "Laser anti-rongeurs", kill-chance: 0.95, cost: 1000000 }
+
+
+
 # ── Zones ──
 sell-zone:       { x: -3, y: -60, z: -1,  radius: 2 }
 garage:          { x: -3, y: -60, z: -6,  radius: 2.5 }
@@ -4426,6 +5754,18 @@ vending-machine: { x:  4, y: -60, z: -1,  radius: 2 }
 drone-shop:      { x:  4, y: -60, z: -6,  radius: 2.5 }
 quest-board:     { x:  4, y: -60, z: -11, radius: 2.5 }
 prestige-altar:  { x:  0, y: -60, z: -15, radius: 2.5 }
+
+# ── Zone de spawn de la pluie de cartons (rectangle XZ, Y aléatoire dans la fourchette) ──
+box-rain-region:
+  min: { x: -18, y: -61, z: 3 }
+  max: { x:  18, y: -40, z:  24 }
+  boxes-per-iteration-per-player: 4
+  iterations: 30
+  interval-ticks: 20
+# ── Région de reset au prestige (copie depuis ctb_template) ──
+prestige-reset-region:
+  min: { x: -18, y: -61, z: 3 }
+  max: { x:  18, y: -40, z:  24 }
 
 # ── Gameplay ──
 box-sell-price: 5
@@ -4608,6 +5948,7 @@ vending-machine-items:
 # ── Persistance ──
 auto-save-interval-seconds: 300
 
+
 name: CleanTheBackyard
 version: '${project.version}'
 main: fr.cleanthebackyard.cleanTheBackyard.CleanTheBackyard
@@ -4620,7 +5961,7 @@ depend:
 commands:
   ctb:
     description: Commandes admin CleanTheBackyard
-    usage: /ctb <stats|money|level|bag|energy|drone|buff|event|sell|prestige|quest|reload>
+    usage: /ctb <stats|money|level|bag|energy|drone|buff|event|sell|prestige|quest|rat|reload>
     permission: ctb.admin
   ctbplay:
     description: Commandes joueur (alias)
@@ -4638,6 +5979,14 @@ commands:
     description: Retourner au hub
     usage: /spawn
     permission: ctb.play
+  setspawn:
+    description: Définit le spawn du hub
+    usage: /setspawn
+    permission: ctb.admin.setspawn
+  setplayerspawn:
+    description: Définit le spawn des mondes joueurs (dans le template)
+    usage: /setplayerspawn
+    permission: ctb.admin.setspawn
 
 permissions:
   ctb.admin:
@@ -4655,6 +6004,7 @@ permissions:
       ctb.admin.sell: true
       ctb.admin.prestige: true
       ctb.admin.quest: true
+      ctb.admin.rat: true
       ctb.admin.reload: true
   ctb.admin.stats:    { description: Voir les stats,     default: op }
   ctb.admin.money:    { description: Gérer l'argent,     default: op }
@@ -4667,11 +6017,15 @@ permissions:
   ctb.admin.sell:     { description: Vendre un sac,      default: op }
   ctb.admin.prestige: { description: Gérer le prestige,  default: op }
   ctb.admin.quest:    { description: Gérer les quêtes,   default: op }
+  ctb.admin.rat:      { description: Force le spawn d'un rat, default: op }
   ctb.admin.reload:   { description: Recharger config,   default: op }
-  ctb.admin.hud: { description: Toggle HUD, default: true }
+  ctb.admin.hud:      { description: Toggle HUD,         default: true }
   ctb.play:
     description: Jouer à Clean The Backyard
     default: true
+  ctb.admin.setspawn:
+    description: Permet de définir les spawns
+    default: op
 
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -4759,4 +6113,74 @@ permissions:
         </plugins>
     </build>
 </project>
+
+package fr.cleanthebackyard.cleanTheBackyard.util;
+
+public final class NumberFormatUtil {
+
+    private NumberFormatUtil() {}
+
+    private static final String[] SUFFIXES = {"", "K", "M", "B", "T", "Q"};
+
+    /**
+     * Formate un nombre en notation compacte :
+     *   999       -> "999"
+     *   1200      -> "1.2K"
+     *   12000     -> "12K"
+     *   120000    -> "120K"
+     *   1200000   -> "1.2M"
+     *   1500000000 -> "1.5B"
+     */
+    public static String format(double value) {
+        boolean negative = value < 0;
+        double abs = Math.abs(value);
+
+        if (abs < 1000) {
+            // Pas de décimales pour les petits nombres
+            long rounded = Math.round(abs);
+            return (negative ? "-" : "") + rounded;
+        }
+
+        int suffixIdx = 0;
+        double scaled = abs;
+        while (scaled >= 1000 && suffixIdx < SUFFIXES.length - 1) {
+            scaled /= 1000.0;
+            suffixIdx++;
+        }
+
+        String numberPart;
+        if (scaled >= 100) {
+            // ex: 120K (pas de décimale)
+            numberPart = String.valueOf((long) scaled);
+        } else if (scaled >= 10) {
+            // ex: 12K (pas de décimale)
+            numberPart = String.valueOf((long) scaled);
+        } else {
+            // ex: 1.2K (une décimale, sans zéro final inutile)
+            double rounded = Math.round(scaled * 10.0) / 10.0;
+            if (rounded == (long) rounded) {
+                numberPart = String.valueOf((long) rounded);
+            } else {
+                numberPart = String.format(java.util.Locale.US, "%.1f", rounded);
+            }
+        }
+
+        return (negative ? "-" : "") + numberPart + SUFFIXES[suffixIdx];
+    }
+
+    public static String format(long value) {
+        return format((double) value);
+    }
+
+    /**
+     * Préfixe avec "$" pour les soldes.
+     */
+    public static String money(double value) {
+        return "$" + format(value);
+    }
+
+    public static String money(long value) {
+        return "$" + format(value);
+    }
+}
 
