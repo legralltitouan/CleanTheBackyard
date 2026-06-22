@@ -172,7 +172,7 @@ Block & entity references support both vanilla and custom syntax:
 ```yaml
 box-block: "itemsadder:example:carton_block"   # or "vanilla:NOTE_BLOCK"
 golden-drone-entity: "mythic:float_donut"       # or "vanilla:BAT"
-
+```
 🗺️ Roadmap
  Unlockable & resizable box zones
  Trash bag visible in hand when carrying boxes
@@ -189,5 +189,3 @@ golden-drone-entity: "mythic:float_donut"       # or "vanilla:BAT"
  Custom-texture GUIs & BetterHUD integration
 Made with 🧹 by 
 TitouanLeGrall
-
-```
