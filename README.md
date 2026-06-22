@@ -1,314 +1,174 @@
+<div align="center">
+
+<img src="assets/banner.png" alt="Clean The Backyard" width="420" />
+
 # 🧹 Clean The Backyard
 
-![Paper 1.21.11](https://img.shields.io/badge/Paper-1.21.11-blue) ![Version](https://img.shields.io/badge/version-0.2.0--SNAPSHOT-orange) ![Java](https://img.shields.io/badge/Java-21-red)
+**An idle-clicker cleaning game for Paper 1.21**
 
-> Un plugin Minecraft **Idle‑Clicker** où vous nettoyez votre jardin en cassant des cartons, améliorez votre équipement, achetez des drones automatiques et participez à des événements temporaires.
+*Break cardboard boxes. Hire drones. Build your home. Fend off thieving rats.*
 
----
+[![Paper](https://img.shields.io/badge/Paper-1.21-blue.svg)](https://papermc.io/)
+[![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://adoptium.net/)
+[![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](#)
+[![Multiverse](https://img.shields.io/badge/requires-Multiverse--Core-purple.svg)](https://github.com/Multiverse/Multiverse-Core)
 
-## 📖 Contexte
-
-**Clean The Backyard** est un mini‑jeu pour serveur **Paper 1.21.11**.  
-Le joueur évolue dans un monde sécurisé (pas de dégâts, faim gelée, pas de monstres). L’objectif est de casser des **cartons** (blocs configurables, par défaut `NOTE_BLOCK`) pour les stocker dans un **sac**, puis de les **vendre** dans une zone dédiée afin de gagner de l’argent.
-
-Cet argent permet d’améliorer :
-
-- la **capacité du sac**,
-- la **vitesse et les bonus** de l’outil (cooldown, cartons multiples),
-- la **réserve d’énergie** et sa régénération.
-
-Avec un bon niveau, vous pouvez acheter des **drones** qui récoltent et vendent automatiquement les cartons. Des **événements** (OVNI, Drone Doré) viennent ponctuellement booster les gains.
-
-Le plugin est **totalement autonome** : il gère la régénération des cartons par secteurs, l’énergie, les buffs temporaires, une boutique, une machine distributrice, et une interface utilisateur complète (GUI, action bar).
+</div>
 
 ---
 
-## 🚧 État actuel (v0.2.0)
+## 📦 What is Clean The Backyard?
 
-Le plugin est **fonctionnel** et prêt à être testé sur un serveur de jeu.  
-Toutes les mécaniques principales sont implémentées :
+**Clean The Backyard** is a progression-driven idle game built on top of Paper.
+Each player gets their own private world cloned from a template, where the loop
+is simple but deeply upgradeable: **break boxes, fill your bag, sell, upgrade, repeat.**
 
-- ✅ Collecte et vente des cartons
-- ✅ Énergie et fatigue
-- ✅ Améliorations (sac, outil, énergie)
-- ✅ Drones (4 niveaux)
-- ✅ Événements : OVNI (multiplicateur global x2), Drone Doré
-- ✅ Distributeur d’objets énergisants
-- ✅ Commandes administrateur complètes
-- ✅ Persistance des données (YAML)
-- ✅ GUI dynamiques (garage, boutique drones, distributeur)
+Behind that loop sits a full economy of upgrades, automation drones, random
+world events, daily quests, prestige, collectible hunting, and a personal
+house you decorate with furniture.
 
-**Points d’attention** :
-- La régénération des secteurs nécessite que les positions des cartons soient pré‑enregistrées (via `SectorManager.registerSector`). Le code fourni ne contient pas de génération automatique du monde – il faut soit pré‑placer les cartons à la main, soit ajouter un script de scan.
-- Les drones utilisent l’entité `BEE` (silencieuse, sans IA). Cela fonctionne sur Paper 1.21.
+<div align="center">
+<img src="assets/carrying-box.png" alt="Carrying a box" width="280" />
+</div>
 
 ---
 
-## ⚙️ Fonctionnalités détaillées
+## ✨ Features
 
-### 🎮 Mécaniques de jeu
+### 🗃️ The Core Loop
+Break cardboard boxes (vanilla blocks **or** ItemsAdder custom blocks), fill
+your bag up to its capacity, then walk into the **sell zone** to cash out.
+Every box costs energy — manage it, or fall into fatigue.
 
-| Mécanique | Description |
-|-----------|-------------|
-| **Cartons** | Blocs cassables (clic gauche). Chaque cassage consomme de l’énergie, ajoute un carton au sac. |
-| **Sac** | Stocke les cartons en attente de vente. Capacité augmentable. |
-| **Outil** | Détermine le temps de cassage (`cooldown-ms`). Peut donner plusieurs cartons en un seul clic (`boxes-per-collection` + `extra-box-chance`). |
-| **Énergie** | Ressource qui se régénère passivement. Tombe à 0 → le joueur est ralenti et aveugle. |
-| **Vente** | En entrant dans la zone de vente (`sell-zone`), tous les cartons du sac sont vendus instantanément. Prix unitaire configurable, multipliable par buffs. |
-| **Améliorations** | Accessibles via le **garage** (zone physique). Coût en argent, niveaux jusqu’à 8. |
-| **Distributeur** | Permet d’acheter des objets (soda, chocolat, boisson énergisante) qui restaurent l’énergie. |
-| **Drones** | Entités volantes (abeilles) qui se déplacent automatiquement, ramassent les cartons et les vendent. Revenu passif. |
-| **Événement OVNI** | Apparition périodique de caisses en `GLOWSTONE`. Chaque joueur peut les casser pour obtenir : argent, `x2 vente` personnel, ou `énergie illimitée`. Si le serveur atteint un quota de cartons normaux cassés pendant l’événement, tout le monde gagne un **multiplicateur de vente global x2** pendant 1 heure. |
-| **Drone Doré** | Une chauve‑souris nommée apparaît près d’un joueur. Celui qui la frappe gagne une récompense en argent (basée sur ses niveaux). |
+### ⚙️ Deep Upgrade Trees
+- **Bag** — 15 capacity tiers, from 10 to 50,000 boxes
+- **Tool** — faster cooldowns, multi-box collection, and bonus-box chances
+- **Energy** — bigger reserves and faster regeneration
 
-### 🧑‍💻 Commandes administrateur
+### 🤖 Automation Drones
+Buy assistant drones that fly around your world, collect boxes, and sell them
+for you. Six drone types from **Basic** to **Stellar**, each with three
+upgrade tracks: **Speed**, **Range**, and **Income**.
 
-Toutes les commandes sont sous `/ctb` et nécessitent la permission `ctb.admin.<sous-commande>`.
+<div align="center">
+<img src="assets/unpacking.png" alt="Unpacking collectibles" width="280" />
+</div>
 
-| Commande | Description |
-|----------|-------------|
-| `/ctb stats [joueur]` | Affiche toutes les stats d’un joueur. |
-| `/ctb money give\|set\|take <joueur> <montant>` | Modifie l’argent. |
-| `/ctb level bag\|tool\|energy <joueur> <niveau>` | Force le niveau d’un équipement. |
-| `/ctb bag fill\|clear\|set <joueur> [quantité]` | Remplit/vide/modifie le sac. |
-| `/ctb energy fill\|set\|drain <joueur> [valeur]` | Gère l’énergie. |
-| `/ctb drone give\|remove <joueur> <clé_drone>` | Donne ou retire un drone (clés : `basic`, `advanced`, `military`, `quantum`). |
-| `/ctb buff doublesell\|unlimitedenergy <joueur> <secondes>` | Applique un buff temporaire. |
-| `/ctb event drone\|ufo` | Déclenche manuellement un événement. |
-| `/ctb sell [joueur]` | Vend le sac du joueur (sans zone). |
-| `/ctb reload` | Recharge la configuration et sauvegarde les données. |
+### 💎 Collectibles & Cleaning Mini-Game
+Some boxes hide rare items — vintage cassettes, Game Boys, golden statues.
+They drop **dirty**, and you clean them through a timing-based mini-game before
+displaying them on your **collection board**. Five rarities, five difficulty levels.
 
-### 🧩 GUI automatiques
+### 🎲 Random World Events
+- **🛸 UFO** — break special crates for buffs; hit the global quota for a server-wide x2 sell bonus
+- **✦ Golden Drone** — chase a fleeing drone and strike it for a big payout
+- **🌧️ Box Rain** — boxes fall from the sky across a defined region
+- **🖤 Black Market** — x3 sell value for everyone, for a limited time
 
-Les interfaces s’ouvrent automatiquement lorsque le joueur entre dans les zones définies dans `config.yml` :
+### 🐀 Rats & Security
+Thieving rats spawn near your stash and try to steal a slice of your balance.
+Defend with **security cameras** (detection) and **traps** (elimination) — or
+just punch them yourself.
 
-- **Garage** → interface d’améliorations
-- **Distributeur** → achat d’objets énergisants
-- **Boutique de drones** → achat de drones
-- **Zone de vente** → vend le contenu du sac (pas de GUI, juste l’action)
+<div align="center">
+<img src="assets/rat.png" alt="Fighting a rat" width="320" />
+</div>
+
+### 🏠 Personal House
+Each player unlocks a private house world cloned from a template. Buy furniture
+from the in-house shop, stock it, and place it freely to decorate your space.
+
+<div align="center">
+<img src="assets/relax-house.png" alt="Relaxing at home" width="320" />
+</div>
+
+### 🥤 Vending Machine
+Out of energy? Grab a soda, a coffee, or an energy drink to top up and keep going.
+
+<div align="center">
+<img src="assets/vending.png" alt="Vending machine" width="320" />
+</div>
+
+### 📜 More Systems
+- **Daily quests** — three rotating objectives that reset at midnight
+- **Prestige** — reset progression for permanent gain multipliers (+10% per level, up to 50)
+- **Live HUD** — balance, bag, energy, and active buffs in the action bar
+- **Session-aware energy regen** — full energy in the hub, gradual regen in your world
 
 ---
 
-## 📁 Configuration
+## 🔧 Requirements
 
-Le fichier `config.yml` est généré au premier démarrage.  
-Extrait des principales sections :
+| Dependency | Status | Purpose |
+|------------|--------|---------|
+| **Paper 1.21** | Required | Server platform |
+| **Java 21** | Required | Runtime |
+| **Multiverse-Core 5.7+** | Required | Per-player world cloning |
+| **ItemsAdder** | Optional | Custom box blocks, furniture & collectibles |
+| **MythicMobs** | Optional | Custom drone & rat entities |
+| **ModelEngine** | Optional | Entity models |
+
+> Without ItemsAdder / MythicMobs the plugin falls back gracefully to vanilla
+> blocks and mobs — nothing breaks.
+
+---
+
+## 🚀 Installation
+
+1. Drop `CleanTheBackyard.jar` into your server's `plugins/` folder.
+2. Install **Multiverse-Core** (required).
+3. *(Optional)* Install ItemsAdder, MythicMobs and ModelEngine for the full experience.
+4. Start the server once to generate `config.yml`.
+5. Create your hub, template, and house-template worlds, then set their spawns.
+6. Run `/ctb reload` after any config change.
+
+---
+
+## 🎮 Commands
+
+### Player
+
+| Command | Description |
+|---------|-------------|
+| `/create` | Create your personal world |
+| `/go` | Travel to your world |
+| `/spawn` | Return to the hub |
+
+### Admin (`ctb.admin`)
+
+| Command | Description |
+|---------|-------------|
+| `/ctb stats [player]` | View full player stats |
+| `/ctb money <give\|set\|take> <player> <amount>` | Manage balances |
+| `/ctb level <bag\|tool\|energy> <player> <level>` | Set upgrade levels |
+| `/ctb drone <give\|remove> <player> <key>` | Manage drones |
+| `/ctb buff <type> <player> <seconds>` | Apply temporary buffs |
+| `/ctb event <drone\|ufo\|boxrain\|blackmarket>` | Trigger events |
+| `/ctb prestige <set\|add> <player> <level>` | Manage prestige |
+| `/ctb collectible <give\|giveclean> <player> <key>` | Spawn collectibles |
+| `/ctb furniture <give\|stock> <player> <key>` | Manage furniture |
+| `/ctb house <tp\|create> <player>` | Manage player houses |
+| `/ctb reload` | Reload configuration |
+
+Admin spawn setup: `/setspawn` (hub) and `/setplayerspawn` (template world).
+
+---
+
+## ⚙️ Configuration
+
+Everything is tuned from `config.yml`:
+
+- **Worlds & spawns** — hub, templates, world prefixes
+- **Interaction zones** — garage, shop, sell zone, quest board, prestige altar…
+- **Upgrade tables** — bag, tool, energy (15 tiers each)
+- **Drone catalogue** — stats, costs, prerequisites
+- **Event timing** — min/max windows for every random event
+- **Rats & security** — spawn rates, steal %, camera/trap upgrades
+- **Collectibles** — drop chances, rarities, cleaning difficulty
+- **Furniture shop** — items, prices, icons
+
+Block & entity references support both vanilla and custom syntax:
 
 ```yaml
-game-world: "world"
-
-sell-zone:
-  x: 81
-  y: 118
-  z: -25
-  radius: 3
-
-garage: { x: 73, y: 118, z: -20, radius: 2.5 }
-vending-machine: { x: 72, y: 117, z: -31, radius: 2.5 }
-drone-shop: { x: 68, y: 117, z: -15, radius: 2.5 }
-
-box-sell-price: 5.0
-global-sell-multiplier: 1.0
-energy-cost-per-box: 3.0
-
-bag-upgrades:  ...   # capacité et coût
-tool-upgrades: ...   # cooldown, boxes-per-collection, extra-box-chance
-energy-upgrades: ... # max-energy, regen-per-sec
-
-drone-types:        # basic, advanced, military, quantum
-  basic:
-    income: 2
-    interval-sec: 10
-    cost: 500
-    speed: 2.5
-    pickup-range: 15
-
-vending-machine-items:
-  soda: { energy-restore: 25, cost: 10 }
-
-Voici un fichier `README.md` professionnel, clair et bien structuré pour le plugin **CleanTheBackyard**, basé sur l’intégralité du code que vous m’avez fourni.
-
-```markdown
-# 🧹 Clean The Backyard
-
-![Paper 1.21.11](https://img.shields.io/badge/Paper-1.21.11-blue) ![Version](https://img.shields.io/badge/version-0.2.0--SNAPSHOT-orange) ![Java](https://img.shields.io/badge/Java-21-red)
-
-> Un plugin Minecraft **Idle‑Clicker** où vous nettoyez votre jardin en cassant des cartons, améliorez votre équipement, achetez des drones automatiques et participez à des événements temporaires.
-
----
-
-## 📖 Contexte
-
-**Clean The Backyard** est un mini‑jeu pour serveur **Paper 1.21.11**.  
-Le joueur évolue dans un monde sécurisé (pas de dégâts, faim gelée, pas de monstres). L’objectif est de casser des **cartons** (blocs configurables, par défaut `NOTE_BLOCK`) pour les stocker dans un **sac**, puis de les **vendre** dans une zone dédiée afin de gagner de l’argent.
-
-Cet argent permet d’améliorer :
-
-- la **capacité du sac**,
-- la **vitesse et les bonus** de l’outil (cooldown, cartons multiples),
-- la **réserve d’énergie** et sa régénération.
-
-Avec un bon niveau, vous pouvez acheter des **drones** qui récoltent et vendent automatiquement les cartons. Des **événements** (OVNI, Drone Doré) viennent ponctuellement booster les gains.
-
-Le plugin est **totalement autonome** : il gère la régénération des cartons par secteurs, l’énergie, les buffs temporaires, une boutique, une machine distributrice, et une interface utilisateur complète (GUI, action bar).
-
----
-
-## 🚧 État actuel (v0.2.0)
-
-Le plugin est **fonctionnel** et prêt à être testé sur un serveur de jeu.  
-Toutes les mécaniques principales sont implémentées :
-
-- ✅ Collecte et vente des cartons
-- ✅ Énergie et fatigue
-- ✅ Améliorations (sac, outil, énergie)
-- ✅ Drones (4 niveaux)
-- ✅ Événements : OVNI (multiplicateur global x2), Drone Doré
-- ✅ Distributeur d’objets énergisants
-- ✅ Commandes administrateur complètes
-- ✅ Persistance des données (YAML)
-- ✅ GUI dynamiques (garage, boutique drones, distributeur)
-
-**Points d’attention** :
-- La régénération des secteurs nécessite que les positions des cartons soient pré‑enregistrées (via `SectorManager.registerSector`). Le code fourni ne contient pas de génération automatique du monde – il faut soit pré‑placer les cartons à la main, soit ajouter un script de scan.
-- Les drones utilisent l’entité `BEE` (silencieuse, sans IA). Cela fonctionne sur Paper 1.21.
-
----
-
-## ⚙️ Fonctionnalités détaillées
-
-### 🎮 Mécaniques de jeu
-
-| Mécanique | Description |
-|-----------|-------------|
-| **Cartons** | Blocs cassables (clic gauche). Chaque cassage consomme de l’énergie, ajoute un carton au sac. |
-| **Sac** | Stocke les cartons en attente de vente. Capacité augmentable. |
-| **Outil** | Détermine le temps de cassage (`cooldown-ms`). Peut donner plusieurs cartons en un seul clic (`boxes-per-collection` + `extra-box-chance`). |
-| **Énergie** | Ressource qui se régénère passivement. Tombe à 0 → le joueur est ralenti et aveugle. |
-| **Vente** | En entrant dans la zone de vente (`sell-zone`), tous les cartons du sac sont vendus instantanément. Prix unitaire configurable, multipliable par buffs. |
-| **Améliorations** | Accessibles via le **garage** (zone physique). Coût en argent, niveaux jusqu’à 8. |
-| **Distributeur** | Permet d’acheter des objets (soda, chocolat, boisson énergisante) qui restaurent l’énergie. |
-| **Drones** | Entités volantes (abeilles) qui se déplacent automatiquement, ramassent les cartons et les vendent. Revenu passif. |
-| **Événement OVNI** | Apparition périodique de caisses en `GLOWSTONE`. Chaque joueur peut les casser pour obtenir : argent, `x2 vente` personnel, ou `énergie illimitée`. Si le serveur atteint un quota de cartons normaux cassés pendant l’événement, tout le monde gagne un **multiplicateur de vente global x2** pendant 1 heure. |
-| **Drone Doré** | Une chauve‑souris nommée apparaît près d’un joueur. Celui qui la frappe gagne une récompense en argent (basée sur ses niveaux). |
-
-### 🧑‍💻 Commandes administrateur
-
-Toutes les commandes sont sous `/ctb` et nécessitent la permission `ctb.admin.<sous-commande>`.
-
-| Commande | Description |
-|----------|-------------|
-| `/ctb stats [joueur]` | Affiche toutes les stats d’un joueur. |
-| `/ctb money give\|set\|take <joueur> <montant>` | Modifie l’argent. |
-| `/ctb level bag\|tool\|energy <joueur> <niveau>` | Force le niveau d’un équipement. |
-| `/ctb bag fill\|clear\|set <joueur> [quantité]` | Remplit/vide/modifie le sac. |
-| `/ctb energy fill\|set\|drain <joueur> [valeur]` | Gère l’énergie. |
-| `/ctb drone give\|remove <joueur> <clé_drone>` | Donne ou retire un drone (clés : `basic`, `advanced`, `military`, `quantum`). |
-| `/ctb buff doublesell\|unlimitedenergy <joueur> <secondes>` | Applique un buff temporaire. |
-| `/ctb event drone\|ufo` | Déclenche manuellement un événement. |
-| `/ctb sell [joueur]` | Vend le sac du joueur (sans zone). |
-| `/ctb reload` | Recharge la configuration et sauvegarde les données. |
-
-### 🧩 GUI automatiques
-
-Les interfaces s’ouvrent automatiquement lorsque le joueur entre dans les zones définies dans `config.yml` :
-
-- **Garage** → interface d’améliorations
-- **Distributeur** → achat d’objets énergisants
-- **Boutique de drones** → achat de drones
-- **Zone de vente** → vend le contenu du sac (pas de GUI, juste l’action)
-
----
-
-## 📁 Configuration
-
-Le fichier `config.yml` est généré au premier démarrage.  
-Extrait des principales sections :
-
-```yaml
-game-world: "world"
-
-sell-zone:
-  x: 81
-  y: 118
-  z: -25
-  radius: 3
-
-garage: { x: 73, y: 118, z: -20, radius: 2.5 }
-vending-machine: { x: 72, y: 117, z: -31, radius: 2.5 }
-drone-shop: { x: 68, y: 117, z: -15, radius: 2.5 }
-
-box-sell-price: 5.0
-global-sell-multiplier: 1.0
-energy-cost-per-box: 3.0
-
-bag-upgrades:  ...   # capacité et coût
-tool-upgrades: ...   # cooldown, boxes-per-collection, extra-box-chance
-energy-upgrades: ... # max-energy, regen-per-sec
-
-drone-types:        # basic, advanced, military, quantum
-  basic:
-    income: 2
-    interval-sec: 10
-    cost: 500
-    speed: 2.5
-    pickup-range: 15
-
-vending-machine-items:
-  soda: { energy-restore: 25, cost: 10 }
-```
-
-Tous les délais d’événements, multiplicateurs, et seuils sont personnalisables.
-
----
-
-## 🔐 Permissions
-
-| Permission | Description |
-|------------|-------------|
-| `ctb.admin` | Accès complet à toutes les commandes (par défaut : OP). |
-| `ctb.admin.<sub>` | Exemple : `ctb.admin.money`, `ctb.admin.event`. |
-| `ctb.play` | Permet de jouer (par défaut : true). |
-
----
-
-## 🛠️ Installation & dépendances
-
-### Prérequis
-
-- **Serveur** : [Paper](https://papermc.io/) 1.21.11 (ou fork compatible, ex. Purpur)
-- **Java** : 21
-- **Aucune autre dépendance** – le plugin est autonome.
-
-### Installation
-
-1. Téléchargez le fichier `CleanTheBackyard-0.2.0-SNAPSHOT.jar`.
-2. Placez‑le dans le dossier `plugins/` de votre serveur.
-3. Redémarrez le serveur (ou faites `plugman load`).
-4. Configurez les coordonnées des zones dans `plugins/CleanTheBackyard/config.yml`.
-5. **Important** : Le monde doit contenir des cartons (blocs `NOTE_BLOCK` par défaut) placés à des positions que le plugin pourra régénérer. Vous pouvez soit les placer manuellement, soit ajouter une routine de scan (non fournie). Sans cela, le secteur ne se regénérera pas.
-6. Accordez les permissions aux administrateurs si nécessaire.
-7. Jouez avec `/ctb` ou directement en cassant des cartons.
-
----
-
-## 🧪 Compilation (pour les développeurs)
-
-Le projet utilise **Maven** :
-
----
-
-## 📜 Licence & crédits
-
-- **Auteur** : TitouanLeGrall
-- **Site** : [cleanthebackyard.fr](https://cleanthebackyard.fr)
-- **Version** : 0.2.0-SNAPSHOT
-- **API** : Paper 1.21.11
-
----
-
-## 🙏 Remarques finales
-
-Ce plugin est en constante évolution. Si vous rencontrez des bugs ou souhaitez proposer des améliorations, n’hésitez pas à ouvrir une *issue* ou à contacter l’auteur.
-
-**Amusez‑vous bien à nettoyer votre jardin !** 🧹✨
+box-block: "itemsadder:example:carton_block"   # or "vanilla:NOTE_BLOCK"
+golden-drone-entity: "mythic:float_donut"       # or "vanilla:BAT"
