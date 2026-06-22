@@ -4,11 +4,11 @@
 
 # 🧹 Clean The Backyard
 
-**An idle-clicker cleaning game for Paper 1.21**
+**An idle-clicker cleaning game for Paper 1.21.11**
 
 *Break cardboard boxes. Hire drones. Build your home. Fend off thieving rats.*
 
-[![Paper](https://img.shields.io/badge/Paper-1.21-blue.svg)](https://papermc.io/)
+[![Paper](https://img.shields.io/badge/Paper-1.21.11-blue.svg)](https://papermc.io/)
 [![Java](https://img.shields.io/badge/Java-21-orange.svg)](https://adoptium.net/)
 [![Version](https://img.shields.io/badge/version-0.2.0-green.svg)](#)
 [![Multiverse](https://img.shields.io/badge/requires-Multiverse--Core-purple.svg)](https://github.com/Multiverse/Multiverse-Core)
