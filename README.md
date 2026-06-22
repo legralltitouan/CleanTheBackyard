@@ -172,3 +172,22 @@ Block & entity references support both vanilla and custom syntax:
 ```yaml
 box-block: "itemsadder:example:carton_block"   # or "vanilla:NOTE_BLOCK"
 golden-drone-entity: "mythic:float_donut"       # or "vanilla:BAT"
+
+🗺️ Roadmap
+ Unlockable & resizable box zones
+ Trash bag visible in hand when carrying boxes
+ Lobby with multi-profile / co-op instances
+ Session multiplier (+1% per minute played)
+ Critical "golden" boxes (x10 value)
+ Talent tree per prestige point
+ Drone skins via milestones
+ Rare box collection & museum
+ 14-day seasons with a free battle pass
+ Daily reward streaks & achievements
+ Offline production (sleep mode)
+ Drone specialization modules
+ Custom-texture GUIs & BetterHUD integration
+Made with 🧹 by 
+TitouanLeGrall
+
+```
